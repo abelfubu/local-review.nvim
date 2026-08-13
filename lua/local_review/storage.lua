@@ -60,7 +60,46 @@ function M.load_scope(scope_root)
   return data
 end
 
----Union two comment lists by comment id, preferring `save_comments` when ids
+local function present_binding(binding)
+  if not binding then
+    return nil
+  end
+
+  if binding.kind == "branch" and binding.name and binding.name ~= "" then
+    return binding
+  end
+
+  if binding.kind == "commit" and binding.commit and binding.commit ~= "" then
+    return binding
+  end
+
+  return nil
+end
+
+local function same_binding(left, right)
+  if not left or not right then
+    return false
+  end
+
+  if left.kind ~= right.kind then
+    return false
+  end
+
+  if left.kind == "branch" then
+    return left.name == right.name
+  end
+
+  return left.commit == right.commit
+end
+
+local function binding_label(binding)
+  if binding.kind == "branch" then
+    return binding.name
+  end
+
+  return binding.commit
+end
+
 ---overlap and preserving the order of `save_comments` before appending any
 ---disk-only comments.
 ---@param save_comments table
@@ -114,11 +153,25 @@ function M.save_scope(scope_root, data)
   local known = last_known[scope_root]
   local current_hash = file_readable and file_hash(path) or nil
 
+  local disk
+  if file_readable then
+    disk = load_json(path)
+  end
+
+  -- A repository session is bound to the first branch that writes a finding.
+  -- If a different binding is already on disk, reject the write so that two
+  -- concurrent first findings cannot rebind the session.
+  local disk_binding = disk and disk.session and disk.session.binding
+  local save_binding = data and data.session and data.session.binding
+  if present_binding(disk_binding) and not same_binding(disk_binding, save_binding) then
+    return nil,
+      string.format("Review session belongs to %s; findings cannot be changed here.", binding_label(disk_binding))
+  end
+
   if file_readable and (known == nil or current_hash ~= known.hash) then
     -- The file changed on disk since we last touched it. Merge instead of
     -- overwriting. If the disk state is corrupt or unreadable, fall back to
     -- the plain overwrite below.
-    local disk = load_json(path)
     if disk and type(disk.comments) == "table" then
       data.comments = merge_comments(data.comments, disk.comments)
     end

@@ -1,0 +1,3 @@
+# Use single branch-bound review sessions with atomic completion
+
+A repository has at most one active review session, authored by one reviewer and bound to one branch. While detached, a session should be bound to one commit; this remains deferred to repository-continuity work. This prevents findings from unrelated code states or reviews from being mixed, at the cost of requiring the reviewer to complete or discard one session before starting another branch review. Completion hands every fresh, conflict-free finding to one destination atomically so the local state cannot imply that only part of a review was delivered; non-destructive partial copies remain available for preview and consultation.
