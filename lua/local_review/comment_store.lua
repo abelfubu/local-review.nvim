@@ -3,6 +3,7 @@ local M = {}
 ---@class LocalReviewComment
 ---@field id string
 ---@field absolute_path string
+---@field relative_path string
 ---@field body string
 ---@field created_at string
 ---@field updated_at string
@@ -204,6 +205,7 @@ end
 
 ---@class UpsertCommentOpts
 ---@field absolute_path string
+---@field relative_path string
 ---@field line integer
 ---@field body string
 ---@field line_end integer?
@@ -229,6 +231,7 @@ function M.upsert_comment(comments, opts)
     existing.body = opts.body
     existing.updated_at = opts.timestamp
     existing.absolute_path = opts.absolute_path
+    existing.relative_path = opts.relative_path
     if opts.line_end ~= nil then
       M.apply_anchor(existing, opts.capture, opts.lines, resolved_line)
       existing.line_end = resolved_end
@@ -244,6 +247,8 @@ function M.upsert_comment(comments, opts)
   local comment = {
     id = opts.generate_id(),
     absolute_path = opts.absolute_path,
+    relative_path = opts.relative_path,
+
     body = opts.body,
     created_at = opts.timestamp,
     updated_at = opts.timestamp,

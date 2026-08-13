@@ -138,6 +138,10 @@ function M.setup(opts)
       jump_and_echo(-1)
     end, {})
 
+    command("LocalReviewGh", function(command_opts)
+      require("local_review.gh_pr").create_review(command_opts.args, { clear_after_export = true })
+    end, { nargs = "?" })
+
     command("LocalReviewExport", function(command_opts)
       require("local_review.export").open_export(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
