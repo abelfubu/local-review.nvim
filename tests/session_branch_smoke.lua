@@ -26,7 +26,13 @@ require("local_review").setup({ storage_dir = storage_dir })
 vim.cmd.edit(vim.fn.fnameescape(path))
 
 local comments = require("local_review.comments")
+local storage = require("local_review.storage")
+local context = require("local_review.context")
+
 assert(comments.set_line_comment(0, 1, "first finding") == "created")
+local ctx = context.comment_context(0)
+assert(ctx and ctx.scope_root, "expected comment context to have a scope root")
+local scope_file = storage.scope_file(ctx.scope_root)
 
 git("switch", "-c", "other-branch")
 
@@ -60,8 +66,35 @@ assert(still_there and still_there.comment, "expected clear_path to be blocked o
 local read_state = comments.get_line_state(0, 1)
 assert(read_state and read_state.comment, "expected findings to remain readable on another branch")
 
+-- Changed source while checked out on another branch must not reconcile or persist.
+local persisted_before = table.concat(vim.fn.readfile(scope_file), "\n")
+vim.api.nvim_buf_set_lines(0, 0, -1, false, { "local value = 2", "print(value)" })
+local changed_state = comments.get_line_state(0, 1)
+assert(changed_state and changed_state.comment, "expected reading to work after source change on another branch")
+assert(
+  changed_state.comment.anchor.line_number == 1,
+  "expected in-memory finding to remain unchanged on another branch"
+)
+local persisted_after = table.concat(vim.fn.readfile(scope_file), "\n")
+assert(persisted_before == persisted_after, "expected persisted data to remain unchanged on another branch")
+
+-- Detached HEAD also blocks mutation while leaving findings readable.
+local detached_commit = vim.fn.systemlist({ "git", "-C", repo, "rev-parse", "HEAD" })[1]
+git("checkout", detached_commit)
+local detached_state = comments.get_line_state(0, 1)
+assert(detached_state and detached_state.comment, "expected findings to remain readable in detached HEAD")
+assert(not detached_state.session.available, "expected session to be unavailable in detached HEAD")
+assert(detached_state.session.bound_to == "review-branch", "expected detached HEAD to report the bound branch")
+
+result, err = comments.set_line_comment(0, 1, "detached finding")
+assert(result == nil, "expected mutation to be blocked in detached HEAD")
+assert(
+  err and err:match("review%-branch"),
+  "expected error to identify the reviewed branch in detached HEAD, got: " .. tostring(err)
+)
+
 git("switch", "review-branch")
-vim.cmd.edit(vim.fn.fnameescape(path))
+vim.cmd("edit! " .. vim.fn.fnameescape(path))
 local reopened = comments.get_line_state(0, 1)
 assert(reopened and reopened.comment, "expected reading to work after reopening on the bound branch")
 assert(reopened.session.available, "expected session to be available on the bound branch")

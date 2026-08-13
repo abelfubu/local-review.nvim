@@ -68,4 +68,29 @@ describe("review session branch availability", function()
     assert.is_nil(stored.session)
     assert.are.same({ { id = "1" } }, stored.comments)
   end)
+
+  it("makes a branch-bound session unavailable on detached HEAD or non-Git target", function()
+    local stored = { session = { binding = { kind = "branch", name = "feature/review" } }, comments = {} }
+
+    local opened = session.open(stored, nil)
+    assert.is_false(opened.available)
+    assert.are.equal("feature/review", opened.bound_to)
+
+    local commit_opened = session.open(stored, { kind = "commit", commit = "abc123" })
+    assert.is_false(commit_opened.available)
+    assert.are.equal("feature/review", commit_opened.bound_to)
+  end)
+
+  it("keeps unbound detached and non-Git sessions mutable", function()
+    local stored = { comments = {} }
+
+    local opened = session.open(stored, nil)
+    assert.is_true(opened.available)
+    assert.is_nil(opened.bound_to)
+    assert.is_nil(stored.session)
+
+    local commit_opened = session.open(stored, { kind = "commit", commit = "abc123" })
+    assert.is_true(commit_opened.available)
+    assert.is_nil(commit_opened.bound_to)
+  end)
 end)

@@ -335,6 +335,40 @@ local function run_ownerless_stale_lock_recovery()
   assert_no_artifacts("ownerless stale lock recovery")
 end
 
+local function run_sequential_binding_rules()
+  local scope_a = vim.fn.tempname() .. "_seq_scope_a"
+  local first_a = { comments = {} }
+  session.bind(first_a, { kind = "branch", name = "feature/a" })
+  assert(storage.save_scope(scope_a, first_a) == true, "first save to scope_a should succeed")
+
+  local second_a = { comments = {} }
+  session.bind(second_a, { kind = "branch", name = "feature/b" })
+  local ok_a, err_a = storage.save_scope(scope_a, second_a)
+  assert(ok_a == nil, "second conflicting save to scope_a should be rejected")
+  assert(err_a and err_a:match("feature/a"), "error should name the bound branch for scope_a: " .. tostring(err_a))
+
+  local scope_b = vim.fn.tempname() .. "_seq_scope_b"
+  local first_b = { comments = {} }
+  session.bind(first_b, { kind = "branch", name = "feature/x" })
+  assert(storage.save_scope(scope_b, first_b) == true, "first save to scope_b should succeed")
+
+  local second_b = { comments = {} }
+  session.bind(second_b, { kind = "branch", name = "feature/x" })
+  assert(storage.save_scope(scope_b, second_b) == true, "same-branch save to scope_b should succeed")
+
+  local scope_c = vim.fn.tempname() .. "_seq_scope_c"
+  local first_c = { comments = {} }
+  session.bind(first_c, { kind = "branch", name = "feature/y" })
+  assert(storage.save_scope(scope_c, first_c) == true, "first save to scope_c should succeed")
+
+  local late_c = { comments = {} }
+  local ok_c, err_c = storage.save_scope(scope_c, late_c)
+  assert(ok_c == nil, "unbound save to scope_c should be rejected")
+  assert(err_c and err_c:match("feature/y"), "error should name the bound branch for scope_c: " .. tostring(err_c))
+
+  assert_no_artifacts("sequential binding rules")
+end
+
 local function run_rejection_leaves_no_artifacts()
   local scope_root = vim.fn.tempname() .. "_rejection_scope"
   local first = storage.load_scope(scope_root)
@@ -351,6 +385,7 @@ local function run_rejection_leaves_no_artifacts()
   assert_no_artifacts("binding rejection")
 end
 
+run_sequential_binding_rules()
 run_binding_race()
 run_same_branch_race()
 run_dead_lock_recovery()

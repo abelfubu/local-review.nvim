@@ -118,7 +118,10 @@ local function scope_state_for_buffer(bufnr)
   }
   local session_state = session.open(scope_state.data, ctx.git_binding)
 
-  reconcile_buffer_state(bufnr or 0, scope_state, ctx)
+  if session_state.available then
+    reconcile_buffer_state(bufnr or 0, scope_state, ctx)
+  end
+
   return {
     ctx = ctx,
     scope_state = scope_state,
