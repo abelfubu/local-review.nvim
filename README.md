@@ -32,25 +32,20 @@ Use your preferred plugin manager. Example with `lazy.nvim`:
 ```lua
 {
   "abelfubu/local-review.nvim",
-  config = function()
-    require("local_review").setup({
-      marker_text = "▎",
-      marker_hl = "LocalReviewMarker",
-      stale_marker_hl = "LocalReviewStaleMarker",
-      keymaps = {
-        comment = "<leader>rc",
-        delete = "<leader>rd",
-        next = "]r",
-        prev = "[r",
-        export = "<leader>re",
-        list = "<leader>rl",
-      },
-      comment_close_keys = {
-        { modes = { "n" }, key = "q" },
-        { modes = { "n", "i" }, key = "<C-c>" },
-      },
-    })
-  end,
+  opts = {
+    keymaps = {
+      comment = "<leader>rc",
+      delete = "<leader>rd",
+      next = "]r",
+      prev = "[r",
+      export = "<leader>re",
+      list = "<leader>rl",
+    },
+    comment_close_keys = {
+      { modes = { "n" }, key = "q" },
+      { modes = { "n", "i" }, key = "<C-c>" },
+    },
+  },
 }
 ```
 
