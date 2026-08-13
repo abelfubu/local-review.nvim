@@ -120,6 +120,7 @@ local function upsert_comment(scope_state, ctx, line, body, line_end)
   local filetype = vim.bo[ctx.bufnr].filetype or ""
   return comment_store.upsert_comment(scope_state.data.comments, {
     absolute_path = ctx.absolute_path,
+    relative_path = ctx.relative_path,
     line = line,
     body = body,
     line_end = line_end,

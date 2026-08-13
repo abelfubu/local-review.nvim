@@ -138,6 +138,10 @@ function M.setup(opts)
       jump_and_echo(-1)
     end, {})
 
+    command("LocalReviewGh", function(command_opts)
+      require("local_review.gh_pr").create_review(command_opts.args, { clear_after_export = true })
+    end, { nargs = "?" })
+
     command("LocalReviewExport", function(command_opts)
       require("local_review.export").open_export(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
@@ -169,6 +173,7 @@ function M.setup(opts)
   map({ "n", "x" }, state.opts.keymaps.next, visual_safe_cmd("LocalReviewNext"), "Local Review: Next")
   map({ "n", "x" }, state.opts.keymaps.prev, visual_safe_cmd("LocalReviewPrev"), "Local Review: Prev")
   map({ "n", "x" }, state.opts.keymaps.export, visual_safe_cmd("LocalReviewExport"), "Local Review: Export")
+  map({ "n", "x" }, state.opts.keymaps.github_review, visual_safe_cmd("LocalReviewGh"), "Local Review: Github Review")
   map({ "n", "x" }, state.opts.keymaps.list, visual_safe_cmd("LocalReviewList"), "Local Review: List")
 end
 

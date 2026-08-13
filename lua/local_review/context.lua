@@ -118,6 +118,7 @@ function M.comment_context(bufnr)
 
   return {
     absolute_path = absolute_path,
+    relative_path = M.relative_path(scope_root, absolute_path),
     scope_root = scope_root,
     bufnr = bufnr or 0,
   }
