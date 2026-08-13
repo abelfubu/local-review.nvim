@@ -40,7 +40,7 @@ local function prompt_review_type(callback)
     end,
   }, function(choice)
     if not choice then
-      return -- user cancelled
+      return
     end
 
     local event_map = {
@@ -60,7 +60,27 @@ local function prompt_review_body(event, callback)
   end)
 end
 
-function M.create_review(path)
+local function to_github_comment(c)
+  local entry = {
+    path = c.relative_path,
+    side = "RIGHT",
+    body = c.body,
+  }
+
+  if c.anchor_end then
+    -- multiline / range comment
+    entry.start_line = c.anchor.line_number
+    entry.start_side = "RIGHT"
+    entry.line = c.anchor_end.line_number
+  else
+    -- single line comment
+    entry.line = c.anchor.line_number
+  end
+
+  return entry
+end
+
+function M.create_review(path, opts)
   local path_comments, root_path, path_kind = comments.list_comments_in_path(path)
 
   if not path_comments or #path_comments == 0 then
@@ -76,20 +96,15 @@ function M.create_review(path)
 
   prompt_review_type(function(event)
     prompt_review_body(event, function(_, body)
-      M.submit_review(path_comments, event, body)
+      M.submit_review(path_comments, event, body, opts, path)
     end)
   end)
 end
 
-function M.submit_review(path_comments, event, body)
+function M.submit_review(path_comments, event, body, opts, path)
   local review_comments = {}
   for _, c in ipairs(path_comments) do
-    table.insert(review_comments, {
-      path = c.relative_path,
-      side = "RIGHT",
-      line = c.line_end,
-      body = c.body,
-    })
+    table.insert(review_comments, to_github_comment(c))
   end
 
   local payload = {
@@ -102,6 +117,12 @@ function M.submit_review(path_comments, event, body)
   local json_str = vim.json.encode(payload)
   local tmpfile = vim.fn.tempname() .. ".json"
   local f = io.open(tmpfile, "w")
+
+  if not f then
+    vim.notify("Failed to create temp file", vim.log.levels.ERROR)
+    return
+  end
+
   f:write(json_str)
   f:close()
 
@@ -122,6 +143,10 @@ function M.submit_review(path_comments, event, body)
     vim.notify("Failed to create PR review:\n" .. result, vim.log.levels.ERROR)
   else
     vim.notify("PR review submitted: " .. event, vim.log.levels.INFO)
+
+    if opts and opts.clear_after_export then
+      comments.clear_path(path, { silent = true })
+    end
   end
 end
 
