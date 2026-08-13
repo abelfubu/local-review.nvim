@@ -60,7 +60,268 @@ function M.load_scope(scope_root)
   return data
 end
 
----Union two comment lists by comment id, preferring `save_comments` when ids
+local function present_binding(binding)
+  if not binding then
+    return nil
+  end
+
+  if binding.kind == "branch" and binding.name and binding.name ~= "" then
+    return binding
+  end
+
+  if binding.kind == "commit" and binding.commit and binding.commit ~= "" then
+    return binding
+  end
+
+  return nil
+end
+
+local function same_binding(left, right)
+  if not left or not right then
+    return false
+  end
+
+  if left.kind ~= right.kind then
+    return false
+  end
+
+  if left.kind == "branch" then
+    return left.name == right.name
+  end
+
+  return left.commit == right.commit
+end
+
+local function binding_label(binding)
+  if binding.kind == "branch" then
+    return binding.name
+  end
+
+  return binding.commit
+end
+
+local LOCK_TIMEOUT_MS = 5000
+local LOCK_POLL_MS = 20
+local STALE_GRACE_MS = 5000
+
+local function lock_path(scope_root)
+  return M.scope_file(scope_root) .. ".lock"
+end
+
+local function owner_json_path(lock)
+  return string.format("%s/owner.json", lock)
+end
+
+local function random_token()
+  local bytes = vim.uv.random(16)
+  if not bytes then
+    bytes = vim.fn.sha256(tostring(vim.uv.hrtime()) .. tostring(math.random()))
+  end
+  local hex = {}
+  for i = 1, #bytes do
+    table.insert(hex, string.format("%02x", string.byte(bytes, i)))
+  end
+  return table.concat(hex)
+end
+
+local function make_owner()
+  return {
+    pid = vim.uv.os_getpid(),
+    token = random_token(),
+    created_at = os.time(),
+  }
+end
+
+local function write_owner(lock, owner)
+  local path = owner_json_path(lock)
+  if M._test_hooks.fail_owner_write then
+    return nil, "injected owner write failure"
+  end
+  local ok, ret = pcall(vim.fn.writefile, { vim.json.encode(owner) }, path)
+  if not ok then
+    return nil, ret
+  end
+  if ret ~= 0 then
+    return nil, "writefile returned " .. tostring(ret)
+  end
+  return true
+end
+
+local function read_owner(lock)
+  local path = owner_json_path(lock)
+  if vim.fn.filereadable(path) == 0 then
+    return nil
+  end
+
+  local lines = vim.fn.readfile(path)
+  local ok, decoded = pcall(vim.json.decode, table.concat(lines, "\n"))
+  if ok and type(decoded) == "table" and type(decoded.pid) == "number" and type(decoded.token) == "string" then
+    return decoded
+  end
+
+  return nil
+end
+
+local function owner_alive(owner)
+  local ok, _, errname = vim.uv.kill(owner.pid, 0)
+  if ok then
+    return true
+  end
+
+  if errname == "EPERM" then
+    return true
+  end
+
+  return false
+end
+
+local function lock_age_seconds(lock)
+  local stat = vim.uv.fs_stat(lock)
+  if not stat or not stat.mtime then
+    return 0
+  end
+
+  return os.time() - stat.mtime.sec
+end
+
+local function quarantine_lock(lock, owner, allow_empty)
+  local tomb = string.format("%s.stale.%s.%s", lock, owner.pid, owner.token)
+  local renamed = vim.uv.fs_rename(lock, tomb)
+  if not renamed then
+    return false
+  end
+
+  if M._test_hooks.fail_release_owner_read then
+    return false
+  end
+
+  local read_ok, disk_owner = pcall(read_owner, tomb)
+  if not read_ok then
+    return false
+  end
+
+  if disk_owner and disk_owner.token == owner.token then
+    vim.fn.delete(tomb, "rf")
+    return true
+  end
+
+  if allow_empty and not disk_owner then
+    local rmdir_ok = pcall(vim.uv.fs_rmdir, tomb)
+    if rmdir_ok then
+      return true
+    end
+  end
+
+  return false
+end
+
+local function release_lock(lock, owner)
+  if not owner or not owner.token then
+    return false
+  end
+  return quarantine_lock(lock, owner, false)
+end
+
+local function reclaim_lock(lock, owner)
+  local stat = vim.uv.fs_stat(lock)
+  if not stat or stat.type ~= "directory" then
+    return false
+  end
+
+  local disk_owner = read_owner(lock)
+  if disk_owner then
+    if owner_alive(disk_owner) then
+      return false
+    end
+  else
+    local grace_seconds = math.ceil((M._test_config.stale_grace_ms or STALE_GRACE_MS) / 1000)
+    if lock_age_seconds(lock) < grace_seconds then
+      return false
+    end
+  end
+
+  local tomb = string.format("%s.stale.%s.%s", lock, owner.pid, owner.token)
+  local renamed = vim.uv.fs_rename(lock, tomb)
+  if not renamed then
+    return false
+  end
+
+  vim.fn.delete(tomb, "rf")
+  return true
+end
+
+local function hrtime_ms()
+  return math.floor(vim.uv.hrtime() / 1e6)
+end
+
+local function acquire_lock(scope_root, owner)
+  local lock = lock_path(scope_root)
+  local timeout_ms = M._test_config.lock_timeout_ms or LOCK_TIMEOUT_MS
+  local poll_ms = LOCK_POLL_MS
+  local deadline = hrtime_ms() + timeout_ms
+
+  while true do
+    local created = vim.uv.fs_mkdir(lock, 448)
+    if created then
+      local write_ok, write_res, write_err = pcall(write_owner, lock, owner)
+      if not write_ok or not write_res then
+        local failure = not write_ok and write_res or write_err
+        quarantine_lock(lock, owner, true)
+        return nil, "Failed to create scope lock owner metadata: " .. tostring(failure)
+      end
+      return true
+    end
+
+    local stat = vim.uv.fs_stat(lock)
+    if stat and stat.type == "directory" then
+      if reclaim_lock(lock, owner) then
+        -- retry mkdir on the next loop iteration
+      else
+        if hrtime_ms() >= deadline then
+          return nil, string.format("Timed out waiting for scope lock for %s.", scope_root)
+        end
+        vim.uv.sleep(poll_ms)
+      end
+    else
+      return nil, string.format("Scope lock path %s is not a directory.", lock)
+    end
+  end
+end
+
+local function atomic_write(path, contents, owner)
+  local tmp = string.format("%s.%s.tmp", path, owner.token)
+  local fd = vim.uv.fs_open(tmp, "wx", 384)
+  if not fd then
+    return nil, string.format("Failed to create temporary file %s.", tmp)
+  end
+
+  if M._test_hooks.fail_write then
+    vim.uv.fs_close(fd)
+    vim.fn.delete(tmp)
+    return nil, "injected write failure"
+  end
+
+  local written = vim.uv.fs_write(fd, contents, -1)
+  local close_ok = vim.uv.fs_close(fd)
+  if not written or written ~= #contents or not close_ok then
+    vim.fn.delete(tmp)
+    return nil, string.format("Failed to write temporary file %s.", tmp)
+  end
+
+  if M._test_hooks.fail_rename then
+    vim.fn.delete(tmp)
+    return nil, "injected rename failure"
+  end
+
+  local renamed = vim.uv.fs_rename(tmp, path)
+  if not renamed then
+    vim.fn.delete(tmp)
+    return nil, string.format("Failed to rename temporary file to %s.", path)
+  end
+
+  return true
+end
+
 ---overlap and preserving the order of `save_comments` before appending any
 ---disk-only comments.
 ---@param save_comments table
@@ -103,6 +364,12 @@ local function merge_comments(save_comments, disk_comments)
   return merged
 end
 
+M._test_hooks = {}
+M._test_config = {
+  lock_timeout_ms = nil,
+  stale_grace_ms = nil,
+}
+
 function M.save_scope(scope_root, data)
   local path = M.scope_file(scope_root)
   data.scope_root = scope_root
@@ -110,22 +377,79 @@ function M.save_scope(scope_root, data)
 
   ensure_dir(vim.fn.fnamemodify(path, ":h"))
 
-  local file_readable = vim.fn.filereadable(path) == 1
-  local known = last_known[scope_root]
-  local current_hash = file_readable and file_hash(path) or nil
-
-  if file_readable and (known == nil or current_hash ~= known.hash) then
-    -- The file changed on disk since we last touched it. Merge instead of
-    -- overwriting. If the disk state is corrupt or unreadable, fall back to
-    -- the plain overwrite below.
-    local disk = load_json(path)
-    if disk and type(disk.comments) == "table" then
-      data.comments = merge_comments(data.comments, disk.comments)
-    end
+  local owner = make_owner()
+  local lock = lock_path(scope_root)
+  local acquired, lock_err = acquire_lock(scope_root, owner)
+  if not acquired then
+    return nil, lock_err
   end
 
-  if vim.fn.writefile({ vim.json.encode(data) }, path) ~= 0 then
-    return nil, string.format("Failed to save review comments to %s.", path)
+  local tmp_path = nil
+
+  local function finalize()
+    if tmp_path then
+      pcall(vim.fn.delete, tmp_path)
+      tmp_path = nil
+    end
+    pcall(release_lock, lock, owner)
+  end
+
+  local function locked_body()
+    if M._test_hooks.after_lock_acquire then
+      M._test_hooks.after_lock_acquire(scope_root)
+    end
+
+    -- Inside the lock: reload disk, validate binding, merge when the file
+    -- changed since we last touched it, then replace the JSON atomically.
+    local file_readable = vim.fn.filereadable(path) == 1
+    local known = last_known[scope_root]
+    local current_hash = file_readable and file_hash(path) or nil
+
+    local disk
+    if file_readable then
+      disk = load_json(path)
+    end
+
+    local disk_binding = disk and disk.session and disk.session.binding
+    local save_binding = data and data.session and data.session.binding
+    if present_binding(disk_binding) and not same_binding(disk_binding, save_binding) then
+      return false,
+        string.format("Review session belongs to %s; findings cannot be changed here.", binding_label(disk_binding))
+    end
+
+    if file_readable and (known == nil or current_hash ~= known.hash) then
+      if disk and type(disk.comments) == "table" then
+        data.comments = merge_comments(data.comments, disk.comments)
+      end
+    end
+
+    local encode_ok, encoded = pcall(vim.json.encode, data)
+    if not encode_ok then
+      return false, "Failed to encode scope data: " .. tostring(encoded)
+    end
+
+    tmp_path = string.format("%s.%s.tmp", path, owner.token)
+    local written, write_err = atomic_write(path, encoded, owner)
+    if not written then
+      return false, write_err
+    end
+
+    if M._test_hooks.before_lock_release then
+      M._test_hooks.before_lock_release(scope_root)
+    end
+
+    return true, nil
+  end
+
+  local ok, success, err = pcall(locked_body)
+  if not ok then
+    finalize()
+    return nil, tostring(success)
+  end
+
+  finalize()
+  if not success then
+    return nil, err
   end
 
   -- Remember the fingerprint of the file we just produced.

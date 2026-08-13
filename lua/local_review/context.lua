@@ -45,6 +45,20 @@ function M.repo_root(path)
   return normalize(result[1])
 end
 
+function M.git_binding(path)
+  local root = M.repo_root(path)
+  if not root then
+    return nil
+  end
+
+  local branch = vim.fn.systemlist({ "git", "-C", root, "symbolic-ref", "--quiet", "--short", "HEAD" })
+  if vim.v.shell_error == 0 and branch[1] and branch[1] ~= "" then
+    return { kind = "branch", name = branch[1] }
+  end
+
+  return nil
+end
+
 function M.scope_root(path)
   local normalized = M.normalize_path(path)
   if not normalized then
@@ -119,6 +133,7 @@ function M.comment_context(bufnr)
   return {
     absolute_path = absolute_path,
     scope_root = scope_root,
+    git_binding = M.git_binding(absolute_path),
     bufnr = bufnr or 0,
   }
 end
