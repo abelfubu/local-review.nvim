@@ -385,6 +385,71 @@ local function run_rejection_leaves_no_artifacts()
   assert_no_artifacts("binding rejection")
 end
 
+local function run_injected_write_failure()
+  local scope_root = vim.fn.tempname() .. "_write_failure_scope"
+  local data = storage.load_scope(scope_root)
+  table.insert(data.comments, { id = "wf", body = "write failure", absolute_path = "/tmp/wf.txt" })
+  session.bind(data, { kind = "branch", name = "feature/writefail" })
+
+  storage._test_hooks.fail_write = true
+  local ok, err = storage.save_scope(scope_root, data)
+  storage._test_hooks.fail_write = nil
+
+  assert(not ok, "write failure should be rejected")
+  assert(err and err:match("injected write failure"), "error should mention injected write failure: " .. tostring(err))
+  assert_no_artifacts("injected write failure")
+
+  local retry_ok, retry_err = storage.save_scope(scope_root, data)
+  assert(retry_ok, "save after write failure should succeed: " .. tostring(retry_err))
+  assert_no_artifacts("after write failure recovery")
+end
+
+local function run_injected_rename_failure()
+  local scope_root = vim.fn.tempname() .. "_rename_failure_scope"
+  local data = storage.load_scope(scope_root)
+  table.insert(data.comments, { id = "rf", body = "rename failure", absolute_path = "/tmp/rf.txt" })
+  session.bind(data, { kind = "branch", name = "feature/renamefail" })
+
+  storage._test_hooks.fail_rename = true
+  local ok, err = storage.save_scope(scope_root, data)
+  storage._test_hooks.fail_rename = nil
+
+  assert(not ok, "rename failure should be rejected")
+  assert(
+    err and err:match("injected rename failure"),
+    "error should mention injected rename failure: " .. tostring(err)
+  )
+  assert_no_artifacts("injected rename failure")
+
+  local retry_ok, retry_err = storage.save_scope(scope_root, data)
+  assert(retry_ok, "save after rename failure should succeed: " .. tostring(retry_err))
+  assert_no_artifacts("after rename failure recovery")
+end
+
+local function run_lock_cleanup_without_temp()
+  local scope_root = vim.fn.tempname() .. "_lock_cleanup_scope"
+  local data = storage.load_scope(scope_root)
+  table.insert(data.comments, { id = "lc", body = "lock cleanup", absolute_path = "/tmp/lc.txt" })
+  session.bind(data, { kind = "branch", name = "feature/lockcleanup" })
+
+  storage._test_hooks.after_lock_acquire = function()
+    error("injected lock body failure")
+  end
+  local ok, err = storage.save_scope(scope_root, data)
+  storage._test_hooks.after_lock_acquire = nil
+
+  assert(not ok, "lock body failure should be rejected")
+  assert(
+    err and err:match("injected lock body failure"),
+    "error should mention injected lock body failure: " .. tostring(err)
+  )
+  assert_no_artifacts("lock cleanup without temp")
+
+  local retry_ok, retry_err = storage.save_scope(scope_root, data)
+  assert(retry_ok, "save after lock body failure should succeed: " .. tostring(retry_err))
+  assert_no_artifacts("after lock cleanup recovery")
+end
+
 run_sequential_binding_rules()
 run_binding_race()
 run_same_branch_race()
@@ -392,6 +457,9 @@ run_dead_lock_recovery()
 run_live_lock_timeout()
 run_ownerless_stale_lock_recovery()
 run_rejection_leaves_no_artifacts()
+run_injected_write_failure()
+run_injected_rename_failure()
+run_lock_cleanup_without_temp()
 
 vim.fn.delete(storage_dir, "rf")
 vim.fn.delete(barrier_dir, "rf")

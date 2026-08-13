@@ -252,11 +252,22 @@ local function atomic_write(path, contents, owner)
     return nil, string.format("Failed to create temporary file %s.", tmp)
   end
 
+  if M._test_hooks.fail_write then
+    vim.uv.fs_close(fd)
+    vim.fn.delete(tmp)
+    return nil, "injected write failure"
+  end
+
   local written = vim.uv.fs_write(fd, contents, -1)
   local close_ok = vim.uv.fs_close(fd)
   if not written or written ~= #contents or not close_ok then
     vim.fn.delete(tmp)
     return nil, string.format("Failed to write temporary file %s.", tmp)
+  end
+
+  if M._test_hooks.fail_rename then
+    vim.fn.delete(tmp)
+    return nil, "injected rename failure"
   end
 
   local renamed = vim.uv.fs_rename(tmp, path)
@@ -330,51 +341,73 @@ function M.save_scope(scope_root, data)
     return nil, lock_err
   end
 
-  local function cleanup()
+  local tmp_path = nil
+
+  local function finalize()
+    if tmp_path then
+      pcall(vim.fn.delete, tmp_path)
+      tmp_path = nil
+    end
     release_lock(lock, owner)
   end
 
-  if M._test_hooks.after_lock_acquire then
-    M._test_hooks.after_lock_acquire(scope_root)
-  end
-
-  -- Inside the lock: reload disk, validate binding, merge when the file
-  -- changed since we last touched it, then replace the JSON atomically.
-  local file_readable = vim.fn.filereadable(path) == 1
-  local known = last_known[scope_root]
-  local current_hash = file_readable and file_hash(path) or nil
-
-  local disk
-  if file_readable then
-    disk = load_json(path)
-  end
-
-  local disk_binding = disk and disk.session and disk.session.binding
-  local save_binding = data and data.session and data.session.binding
-  if present_binding(disk_binding) and not same_binding(disk_binding, save_binding) then
-    cleanup()
-    return nil,
-      string.format("Review session belongs to %s; findings cannot be changed here.", binding_label(disk_binding))
-  end
-
-  if file_readable and (known == nil or current_hash ~= known.hash) then
-    if disk and type(disk.comments) == "table" then
-      data.comments = merge_comments(data.comments, disk.comments)
+  local function locked_body()
+    if M._test_hooks.after_lock_acquire then
+      M._test_hooks.after_lock_acquire(scope_root)
     end
+
+    -- Inside the lock: reload disk, validate binding, merge when the file
+    -- changed since we last touched it, then replace the JSON atomically.
+    local file_readable = vim.fn.filereadable(path) == 1
+    local known = last_known[scope_root]
+    local current_hash = file_readable and file_hash(path) or nil
+
+    local disk
+    if file_readable then
+      disk = load_json(path)
+    end
+
+    local disk_binding = disk and disk.session and disk.session.binding
+    local save_binding = data and data.session and data.session.binding
+    if present_binding(disk_binding) and not same_binding(disk_binding, save_binding) then
+      return false,
+        string.format("Review session belongs to %s; findings cannot be changed here.", binding_label(disk_binding))
+    end
+
+    if file_readable and (known == nil or current_hash ~= known.hash) then
+      if disk and type(disk.comments) == "table" then
+        data.comments = merge_comments(data.comments, disk.comments)
+      end
+    end
+
+    local encode_ok, encoded = pcall(vim.json.encode, data)
+    if not encode_ok then
+      return false, "Failed to encode scope data: " .. tostring(encoded)
+    end
+
+    tmp_path = string.format("%s.%s.tmp", path, owner.token)
+    local written, write_err = atomic_write(path, encoded, owner)
+    if not written then
+      return false, write_err
+    end
+
+    if M._test_hooks.before_lock_release then
+      M._test_hooks.before_lock_release(scope_root)
+    end
+
+    return true, nil
   end
 
-  local encoded = vim.json.encode(data)
-  local written, write_err = atomic_write(path, encoded, owner)
-  if not written then
-    cleanup()
-    return nil, write_err
+  local ok, success, err = pcall(locked_body)
+  if not ok then
+    finalize()
+    return nil, tostring(success)
   end
 
-  if M._test_hooks.before_lock_release then
-    M._test_hooks.before_lock_release(scope_root)
+  finalize()
+  if not success then
+    return nil, err
   end
-
-  cleanup()
 
   -- Remember the fingerprint of the file we just produced.
   last_known[scope_root] = { hash = file_hash(path) }
