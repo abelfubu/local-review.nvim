@@ -134,7 +134,17 @@ end
 
 local function write_owner(lock, owner)
   local path = owner_json_path(lock)
-  vim.fn.writefile({ vim.json.encode(owner) }, path)
+  if M._test_hooks.fail_owner_write then
+    return nil, "injected owner write failure"
+  end
+  local ok, ret = pcall(vim.fn.writefile, { vim.json.encode(owner) }, path)
+  if not ok then
+    return nil, ret
+  end
+  if ret ~= 0 then
+    return nil, "writefile returned " .. tostring(ret)
+  end
+  return true
 end
 
 local function read_owner(lock)
@@ -174,14 +184,42 @@ local function lock_age_seconds(lock)
   return os.time() - stat.mtime.sec
 end
 
-local function release_lock(lock, owner)
-  local disk_owner = read_owner(lock)
-  if disk_owner and disk_owner.token ~= owner.token then
+local function quarantine_lock(lock, owner, allow_empty)
+  local tomb = string.format("%s.stale.%s.%s", lock, owner.pid, owner.token)
+  local renamed = vim.uv.fs_rename(lock, tomb)
+  if not renamed then
     return false
   end
 
-  vim.fn.delete(lock, "rf")
-  return true
+  if M._test_hooks.fail_release_owner_read then
+    return false
+  end
+
+  local read_ok, disk_owner = pcall(read_owner, tomb)
+  if not read_ok then
+    return false
+  end
+
+  if disk_owner and disk_owner.token == owner.token then
+    vim.fn.delete(tomb, "rf")
+    return true
+  end
+
+  if allow_empty and not disk_owner then
+    local rmdir_ok = pcall(vim.uv.fs_rmdir, tomb)
+    if rmdir_ok then
+      return true
+    end
+  end
+
+  return false
+end
+
+local function release_lock(lock, owner)
+  if not owner or not owner.token then
+    return false
+  end
+  return quarantine_lock(lock, owner, false)
 end
 
 local function reclaim_lock(lock, owner)
@@ -225,7 +263,12 @@ local function acquire_lock(scope_root, owner)
   while true do
     local created = vim.uv.fs_mkdir(lock, 448)
     if created then
-      write_owner(lock, owner)
+      local write_ok, write_res, write_err = pcall(write_owner, lock, owner)
+      if not write_ok or not write_res then
+        local failure = not write_ok and write_res or write_err
+        quarantine_lock(lock, owner, true)
+        return nil, "Failed to create scope lock owner metadata: " .. tostring(failure)
+      end
       return true
     end
 
@@ -348,7 +391,7 @@ function M.save_scope(scope_root, data)
       pcall(vim.fn.delete, tmp_path)
       tmp_path = nil
     end
-    release_lock(lock, owner)
+    pcall(release_lock, lock, owner)
   end
 
   local function locked_body()

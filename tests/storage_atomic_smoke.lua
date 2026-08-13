@@ -450,6 +450,95 @@ local function run_lock_cleanup_without_temp()
   assert_no_artifacts("after lock cleanup recovery")
 end
 
+local function run_injected_owner_write_failure()
+  local scope_root = vim.fn.tempname() .. "_owner_write_failure_scope"
+  local data = storage.load_scope(scope_root)
+  table.insert(data.comments, { id = "owf", body = "owner write failure", absolute_path = "/tmp/owf.txt" })
+  session.bind(data, { kind = "branch", name = "feature/ownerwritefail" })
+
+  storage._test_hooks.fail_owner_write = true
+  local ok, res, err = pcall(storage.save_scope, scope_root, data)
+  storage._test_hooks.fail_owner_write = nil
+
+  assert(ok, "save_scope should not throw on owner write failure: " .. tostring(res))
+  assert(res == nil, "owner write failure should return nil")
+  assert(
+    err and err:match("injected owner write failure"),
+    "error should mention injected owner write failure: " .. tostring(err)
+  )
+  assert(vim.fn.isdirectory(storage.scope_file(scope_root) .. ".lock") == 0, "canonical lock should be absent")
+  assert_no_artifacts("owner write failure")
+
+  local retry_ok, retry_err = storage.save_scope(scope_root, data)
+  assert(retry_ok, "save after owner write failure should succeed: " .. tostring(retry_err))
+  assert_no_artifacts("after owner write failure recovery")
+end
+
+local function run_release_owner_read_throw_success()
+  local scope_root = vim.fn.tempname() .. "_release_read_throw_success_scope"
+  local data = storage.load_scope(scope_root)
+  table.insert(data.comments, { id = "rrts", body = "release read throw success", absolute_path = "/tmp/rrts.txt" })
+  session.bind(data, { kind = "branch", name = "feature/releasereadsuccess" })
+
+  storage._test_hooks.fail_release_owner_read = true
+  local ok, res, err = pcall(storage.save_scope, scope_root, data)
+  storage._test_hooks.fail_release_owner_read = nil
+
+  assert(ok, "save_scope should not throw on release owner read failure: " .. tostring(res))
+  assert(res == true, "successful body should remain true despite release failure: " .. tostring(err))
+
+  local lock = storage.scope_file(scope_root) .. ".lock"
+  assert(vim.fn.isdirectory(lock) == 0, "canonical lock should be quarantined")
+
+  local tomb
+  for _, entry in ipairs(vim.fn.glob(vim.fs.joinpath(storage_dir, "*"), false, true)) do
+    if entry:match("%.stale%.") then
+      tomb = entry
+      break
+    end
+  end
+  assert(tomb, "quarantined tomb should exist after release owner read failure")
+  vim.fn.delete(tomb, "rf")
+
+  local final = storage.load_scope(scope_root)
+  assert(
+    final.session and final.session.binding and final.session.binding.name == "feature/releasereadsuccess",
+    "persisted binding should survive release read failure"
+  )
+  assert_no_artifacts("release owner read throw success")
+end
+
+local function run_release_owner_read_throw_failure()
+  local scope_root = vim.fn.tempname() .. "_release_read_throw_failure_scope"
+  local data = storage.load_scope(scope_root)
+  table.insert(data.comments, { id = "rrtf", body = "release read throw failure", absolute_path = "/tmp/rrtf.txt" })
+  session.bind(data, { kind = "branch", name = "feature/releasereadfail" })
+
+  storage._test_hooks.fail_write = true
+  storage._test_hooks.fail_release_owner_read = true
+  local ok, res, err = pcall(storage.save_scope, scope_root, data)
+  storage._test_hooks.fail_write = nil
+  storage._test_hooks.fail_release_owner_read = nil
+
+  assert(ok, "save_scope should not throw on combined failure: " .. tostring(res))
+  assert(res == nil, "combined failure should return nil")
+  assert(err and err:match("injected write failure"), "original write error should survive: " .. tostring(err))
+
+  local lock = storage.scope_file(scope_root) .. ".lock"
+  assert(vim.fn.isdirectory(lock) == 0, "canonical lock should be quarantined")
+
+  local tomb
+  for _, entry in ipairs(vim.fn.glob(vim.fs.joinpath(storage_dir, "*"), false, true)) do
+    if entry:match("%.stale%.") then
+      tomb = entry
+      break
+    end
+  end
+  assert(tomb, "quarantined tomb should exist after release owner read failure on failed body")
+  vim.fn.delete(tomb, "rf")
+  assert_no_artifacts("release owner read throw failure")
+end
+
 run_sequential_binding_rules()
 run_binding_race()
 run_same_branch_race()
@@ -457,9 +546,12 @@ run_dead_lock_recovery()
 run_live_lock_timeout()
 run_ownerless_stale_lock_recovery()
 run_rejection_leaves_no_artifacts()
+run_injected_owner_write_failure()
 run_injected_write_failure()
 run_injected_rename_failure()
 run_lock_cleanup_without_temp()
+run_release_owner_read_throw_success()
+run_release_owner_read_throw_failure()
 
 vim.fn.delete(storage_dir, "rf")
 vim.fn.delete(barrier_dir, "rf")
