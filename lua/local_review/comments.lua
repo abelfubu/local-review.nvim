@@ -4,6 +4,15 @@ local context = require("local_review.context")
 local positioning = require("local_review.positioning")
 local storage = require("local_review.storage")
 local comment_store = require("local_review.comment_store")
+local session = require("local_review.session")
+
+local function ensure_binding(line_state)
+  local binding = line_state.ctx.git_binding
+  if binding and binding.kind == "branch" and not line_state.session.binding then
+    session.bind(line_state.scope_state.data, binding)
+  end
+  return true
+end
 
 local state = {
   file_fingerprints = {},
@@ -107,11 +116,13 @@ local function scope_state_for_buffer(bufnr)
     scope_root = ctx.scope_root,
     data = storage.load_scope(ctx.scope_root),
   }
+  local session_state = session.open(scope_state.data, ctx.git_binding)
 
   reconcile_buffer_state(bufnr or 0, scope_state, ctx)
   return {
     ctx = ctx,
     scope_state = scope_state,
+    session = session_state,
   }
 end
 
@@ -148,6 +159,7 @@ local function find_current_comment()
     index = index,
     ctx = resolved.ctx,
     scope_state = resolved.scope_state,
+    session = resolved.session,
   }
 end
 
@@ -165,6 +177,7 @@ local function find_line_comment(bufnr, line)
     index = index,
     ctx = resolved.ctx,
     scope_state = resolved.scope_state,
+    session = resolved.session,
   }
 end
 
@@ -218,12 +231,14 @@ local function remove_matching_comments(target_path, kind)
     end
 
     if changed then
+      local new_data = { scope_root = scope.scope_root }
+      for key, value in pairs(scope.data) do
+        new_data[key] = value
+      end
+      new_data.comments = kept
       changed_scopes[#changed_scopes + 1] = {
         scope_root = scope.scope_root,
-        data = {
-          scope_root = scope.scope_root,
-          comments = kept,
-        },
+        data = new_data,
       }
     end
   end
@@ -289,6 +304,10 @@ function M.set_line_comment(bufnr, line, body, range)
   if not line_state then
     return nil, "Unable to resolve comment target."
   end
+  if not line_state.session.available then
+    return nil,
+      string.format("Review session belongs to %s; findings cannot be changed here.", line_state.session.bound_to)
+  end
 
   local trimmed = vim.trim(body or "")
   if trimmed == "" then
@@ -303,6 +322,8 @@ function M.set_line_comment(bufnr, line, body, range)
 
     return "noop"
   end
+
+  ensure_binding(line_state)
 
   local anchor_line = line
   local line_end = nil
@@ -323,6 +344,10 @@ function M.delete_line_comment(bufnr, line)
   local line_state = M.get_line_state(bufnr, line)
   if not line_state then
     return nil, "Unable to resolve comment target."
+  end
+  if not line_state.session.available then
+    return nil,
+      string.format("Review session belongs to %s; findings cannot be changed here.", line_state.session.bound_to)
   end
 
   if line_state.index == nil then
@@ -345,6 +370,13 @@ function M.delete_current_line()
 
   if result.index == nil then
     vim.notify("No review comment on the current line.", vim.log.levels.INFO)
+    return
+  end
+  if not result.session.available then
+    vim.notify(
+      string.format("Review session belongs to %s; findings cannot be changed here.", result.session.bound_to),
+      vim.log.levels.WARN
+    )
     return
   end
 
@@ -412,6 +444,18 @@ function M.clear_path(path, opts)
   end
 
   local changed_scopes = remove_matching_comments(target_path, kind)
+  for _, scope in ipairs(changed_scopes) do
+    local binding = context.git_binding(scope.scope_root)
+    local session_state = session.open(scope.data, binding)
+    if not session_state.available then
+      vim.notify(
+        string.format("Review session belongs to %s; findings cannot be changed here.", session_state.bound_to),
+        vim.log.levels.WARN
+      )
+      return
+    end
+  end
+
   for _, scope in ipairs(changed_scopes) do
     if #scope.data.comments == 0 then
       if not storage.delete_scope(scope.scope_root) then

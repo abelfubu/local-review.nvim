@@ -13,6 +13,7 @@ CONTENTS                                                  *local-review*
   8. Highlights ................. |local-review-highlights|
   9. Telescope .................. |local-review-telescope|
  10. Storage .................... |local-review-storage|
+ 11. Branch-bound sessions ....... |local-review-branch-sessions|
 
 ==============================================================================
 1. INTRODUCTION                                   *local-review-introduction*
@@ -187,5 +188,19 @@ Comments are stored as JSON in `storage_dir`, one file per repository
 repos). Writes are guarded against concurrent Neovim instances: if the file
 changed on disk since it was loaded, comments are merged by id instead of
 overwritten.
+
+================================================================================
+11. BRANCH-BOUND SESSIONS                          *local-review-branch-sessions|
+
+Inside a Git repository, a review session binds to the branch where its first
+finding is created. Reopening the same repository on that branch keeps every
+command available. On a different branch the existing findings remain visible,
+but creating, editing, or deleting a comment is blocked and the error names the
+bound branch.
+
+Sessions with no findings yet, legacy records without a stored branch, and files
+outside Git repositories are not bound and keep their previous behavior.
+Detached HEADs are also left unbound until repository-continuity work is
+finished.
 
 vim:tw=78:ts=8:ft=help:norl:
