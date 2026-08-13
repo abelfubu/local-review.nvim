@@ -1,12 +1,14 @@
 # local-review.nvim
 
+![Comment UI](./screenshots/comment_ui.png)
+
 Neovim plugin for local code review, built for use with coding agents.
 
 > Fork of [ssundarraj/local-review.nvim](https://github.com/ssundarraj/local-review.nvim), heavily extended: multi-line ranges, dual anchors, stale detection, concurrency-safe storage, tests and CI.
 
 Add, edit and delete comments on lines of code while reviewing, then export them as agent-ready text. Use your existing diff-viewer for diffs.
 
-![Comment UI](./screenshots/comment_ui.png)
+https://github.com/user-attachments/assets/e44d0e04-ad6c-405f-b1db-daac858153b4
 
 Use the included [skill](./skills/local-review/SKILL.md) that tells agents how to read comments.
 
