@@ -56,13 +56,6 @@ function M.git_binding(path)
     return { kind = "branch", name = branch[1] }
   end
 
-  -- Detached HEADs are not bound in issue 001, but the commit marker is
-  -- preserved as plumbing for the repository-continuity follow-up.
-  local commit = vim.fn.systemlist({ "git", "-C", root, "rev-parse", "HEAD" })
-  if vim.v.shell_error == 0 and commit[1] and commit[1] ~= "" then
-    return { kind = "commit", commit = commit[1] }
-  end
-
   return nil
 end
 
