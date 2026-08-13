@@ -173,9 +173,11 @@ function M.reconcile_dual_anchor_comment(comment, lines, resolve, capture)
       resolved_start, resolved_end = resolved_end, resolved_start
     end
 
-    if resolved_start == comment.anchor.line_number
-        and resolved_end == comment.anchor_end.line_number
-        and not comment.stale then
+    if
+      resolved_start == comment.anchor.line_number
+      and resolved_end == comment.anchor_end.line_number
+      and not comment.stale
+    then
       return false
     end
 

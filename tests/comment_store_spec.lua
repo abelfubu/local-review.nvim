@@ -392,13 +392,8 @@ describe("comment_store dual-anchor reconcile", function()
     local comment = make_dual_anchor_comment(3, 7)
     local lines = lines_fixture()
 
-    local changed = comment_store.reconcile_comment(
-      comment,
-      lines,
-      resolve_with_offsets(0, 2),
-      simple_capture,
-      id_generator()
-    )
+    local changed =
+      comment_store.reconcile_comment(comment, lines, resolve_with_offsets(0, 2), simple_capture, id_generator())
 
     assert.is_true(changed)
     assert.is_false(comment.stale)
@@ -430,13 +425,8 @@ describe("comment_store dual-anchor reconcile", function()
     local comment = make_dual_anchor_comment(3, 7)
     local lines = lines_fixture()
 
-    local changed = comment_store.reconcile_comment(
-      comment,
-      lines,
-      resolve_with_offsets(2, 2),
-      simple_capture,
-      id_generator()
-    )
+    local changed =
+      comment_store.reconcile_comment(comment, lines, resolve_with_offsets(2, 2), simple_capture, id_generator())
 
     assert.is_true(changed)
     assert.is_false(comment.stale)

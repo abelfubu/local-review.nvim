@@ -90,10 +90,7 @@ function M.open_export(path, opts)
         vim.log.levels.INFO
       )
     else
-      vim.notify(
-        "Failed to copy review comments to the system clipboard; comments were kept.",
-        vim.log.levels.ERROR
-      )
+      vim.notify("Failed to copy review comments to the system clipboard; comments were kept.", vim.log.levels.ERROR)
     end
   end
 

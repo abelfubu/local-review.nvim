@@ -85,7 +85,9 @@ local function preview_lines(comment)
       string.format("File not found: %s", comment.absolute_path),
       "",
       comment.body,
-    }, nil, nil
+    },
+      nil,
+      nil
   end
 
   return vim.fn.readfile(comment.absolute_path), comment.anchor.line_number, comment.line_end
@@ -113,13 +115,7 @@ local function previewer(previewers)
         local max_line = vim.api.nvim_buf_line_count(self.state.bufnr)
         local clamped_start = math.max(1, math.min(start_line, max_line))
         local clamped_end = math.max(clamped_start, math.min(end_line or start_line, max_line))
-        vim.hl.range(
-          self.state.bufnr,
-          preview_namespace,
-          "Visual",
-          { clamped_start - 1, 0 },
-          { clamped_end - 1, -1 }
-        )
+        vim.hl.range(self.state.bufnr, preview_namespace, "Visual", { clamped_start - 1, 0 }, { clamped_end - 1, -1 })
         pcall(vim.api.nvim_win_set_cursor, status.preview_win, { clamped_start, 0 })
         pcall(vim.api.nvim_win_call, status.preview_win, function()
           vim.cmd("normal! zz")
