@@ -228,55 +228,10 @@ local function inline_column(source_winid)
   return text_column_offset(source_winid)
 end
 
---- Row of the global tabline, which window-position APIs do not account for.
-local function tabline_height()
-  local showtabline = vim.o.showtabline
-  if showtabline == 2 or (showtabline == 1 and #vim.api.nvim_list_tabpages() > 1) then
-    return 1
-  end
-  return 0
-end
-
---- A winbar occupies one row at the top of the window's grid area.
-local function winbar_height(winid)
-  return vim.wo[winid].winbar ~= "" and 1 or 0
-end
-
---- Position the editor float and correct for environment-specific drift.
---- Some setups (custom statuscolumns, experimental UIs) render a float a few
---- cells away from its configured position; compare the rendered position
---- against the intended one and compensate once.
----
---- Coordinate spaces: nvim_win_get_position() returns the source window's
---- 0-based origin relative to the first window row (it ignores the tabline),
---- while win_screenpos() returns the float's 1-based position on the
---- absolute screen grid (tabline included).
 local function place_editor(winid, cfg)
+  -- Keep the float relative to its source window. Recalculating its absolute
+  -- screen position can shift a right-split editor into the left split.
   vim.api.nvim_win_set_config(winid, cfg)
-
-  if not is_valid_window(state.source_winid) or not is_valid_window(winid) then
-    return
-  end
-
-  local ok, source_origin = pcall(vim.api.nvim_win_get_position, state.source_winid)
-  if not ok then
-    return
-  end
-
-  local actual_pos = vim.fn.win_screenpos(winid)
-  if actual_pos[1] == 0 then
-    return
-  end
-
-  local drift_row = (source_origin[1] + tabline_height() + winbar_height(state.source_winid) + 1 + cfg.row)
-    - actual_pos[1]
-  local drift_col = (source_origin[2] + 1 + cfg.col) - actual_pos[2]
-  if drift_row ~= 0 or drift_col ~= 0 then
-    vim.api.nvim_win_set_config(
-      winid,
-      vim.tbl_extend("force", cfg, { row = cfg.row + drift_row, col = cfg.col + drift_col })
-    )
-  end
 end
 
 local function update_layout()
@@ -371,13 +326,17 @@ local function attach_editor_autocmds(bufnr, winid)
 
   vim.api.nvim_create_autocmd("WinLeave", {
     group = group,
+    buffer = bufnr,
     callback = function()
-      if not is_valid_window(winid) or vim.api.nvim_get_current_win() ~= winid or state.closing then
+      if state.editor_winid ~= winid or state.closing then
         return
       end
 
       vim.schedule(function()
-        M.close_active()
+        -- A different editor may have opened before this callback runs.
+        if state.editor_winid == winid and vim.api.nvim_get_current_win() ~= winid then
+          M.close_active()
+        end
       end)
     end,
   })

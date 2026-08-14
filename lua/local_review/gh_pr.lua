@@ -1,27 +1,24 @@
 local comments = require("local_review.comments")
+local context = require("local_review.context")
 
 local M = {}
 
-local function get_repo_slug()
-  local out = vim.fn.system("gh repo view --json owner,name -q '.owner.login + \"/\" + .name'")
-  return vim.trim(out)
+local function run(command, cwd)
+  local result = vim.system(command, { cwd = cwd, text = true }):wait()
+  if result.code ~= 0 then
+    return nil, vim.trim(result.stderr or result.stdout or "")
+  end
+  return vim.trim(result.stdout or "")
 end
 
-local function get_pr_number()
-  local out = vim.fn.system("gh pr view --json number -q .number")
-  return vim.trim(out)
+local function get_repo_slug(repo_root)
+  return run({ "gh", "repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name' }, repo_root)
 end
 
-local function get_commit_id()
-  local out = vim.fn.system("git rev-parse HEAD")
-  return vim.trim(out)
-end
-
-local function get_pr_info()
-  local out = vim.fn.system("gh pr view --json number,headRefOid 2>&1")
-
-  if vim.v.shell_error ~= 0 then
-    return nil, out
+local function get_pr_info(repo_root)
+  local out, err = run({ "gh", "pr", "view", "--json", "number,headRefOid" }, repo_root)
+  if not out then
+    return nil, err
   end
 
   local ok, decoded = pcall(vim.json.decode, out)
@@ -54,9 +51,18 @@ local function prompt_review_type(callback)
 end
 
 local function prompt_review_body(event, callback)
-  vim.ui.input({ prompt = "Review summary (optional): " }, function(input)
+  local required = event == "COMMENT" or event == "REQUEST_CHANGES"
+  local prompt = required and "Review summary (required): " or "Review summary (optional): "
+  vim.ui.input({ prompt = prompt }, function(input)
     -- input is nil if user cancelled with <Esc>, "" if they just hit enter
-    callback(event, input or "")
+    if input == nil then
+      return
+    end
+    if required and vim.trim(input) == "" then
+      vim.notify("A review summary is required for this review type.", vim.log.levels.ERROR)
+      return
+    end
+    callback(event, input)
   end)
 end
 
@@ -81,34 +87,62 @@ local function to_github_comment(c)
 end
 
 function M.create_review(path, opts)
-  local path_comments, root_path, path_kind = comments.list_comments_in_path(path)
+  local path_comments, target_path = comments.list_comments_in_path(path)
 
   if not path_comments or #path_comments == 0 then
     vim.notify("No comments to submit", vim.log.levels.WARN)
     return
   end
 
-  local pr_info, err = get_pr_info()
+  for _, comment in ipairs(path_comments) do
+    if comment.stale then
+      vim.notify("Cannot submit stale comments. Recreate or delete them first.", vim.log.levels.ERROR)
+      return
+    end
+  end
+
+  local repo_root = context.scope_root(target_path)
+  local pr_info, err = get_pr_info(repo_root)
   if not pr_info then
-    vim.notify("No PR found for current branch. Create one first:\n  gh pr create", vim.log.levels.ERROR)
+    vim.notify(err or "No PR found for current branch. Create one first:\n  gh pr create", vim.log.levels.ERROR)
     return
   end
 
   prompt_review_type(function(event)
     prompt_review_body(event, function(_, body)
-      M.submit_review(path_comments, event, body, opts, path)
+      local ok, submit_err = M.submit_review(path_comments, event, body, pr_info, repo_root)
+      if not ok then
+        vim.notify("Failed to create PR review:\n" .. submit_err, vim.log.levels.ERROR)
+        return
+      end
+
+      vim.notify("PR review submitted: " .. event, vim.log.levels.INFO)
+      if opts and opts.clear_after_export then
+        local submitted_ids = {}
+        for _, comment in ipairs(path_comments) do
+          submitted_ids[#submitted_ids + 1] = comment.id
+        end
+        local cleared, clear_err = comments.remove_comments(submitted_ids, { silent = true })
+        if not cleared then
+          vim.notify("Failed to clear submitted comments: " .. (clear_err or "Unknown error"), vim.log.levels.ERROR)
+        end
+      end
     end)
   end)
 end
 
-function M.submit_review(path_comments, event, body, opts, path)
+function M.submit_review(path_comments, event, body, pr_info, repo_root)
+  if not pr_info.headRefOid or pr_info.headRefOid == "" then
+    return nil, "PR head commit is missing"
+  end
+
   local review_comments = {}
   for _, c in ipairs(path_comments) do
     table.insert(review_comments, to_github_comment(c))
   end
 
   local payload = {
-    commit_id = get_commit_id(),
+    commit_id = pr_info.headRefOid,
     event = event,
     body = body,
     comments = review_comments,
@@ -119,35 +153,32 @@ function M.submit_review(path_comments, event, body, opts, path)
   local f = io.open(tmpfile, "w")
 
   if not f then
-    vim.notify("Failed to create temp file", vim.log.levels.ERROR)
-    return
+    return nil, "Failed to create temp file"
   end
 
   f:write(json_str)
   f:close()
 
-  local repo_slug = get_repo_slug()
-  local pr_number = get_pr_number()
-
-  local cmd = string.format(
-    "gh api repos/%s/pulls/%s/reviews --method POST --input %s",
-    repo_slug,
-    pr_number,
-    vim.fn.shellescape(tmpfile)
-  )
-
-  local result = vim.fn.system(cmd)
+  local repo_slug, repo_err = get_repo_slug(repo_root)
+  local result, submit_err
+  if repo_slug then
+    result, submit_err = run({
+      "gh",
+      "api",
+      string.format("repos/%s/pulls/%s/reviews", repo_slug, pr_info.number),
+      "--method",
+      "POST",
+      "--input",
+      tmpfile,
+    }, repo_root)
+  end
   os.remove(tmpfile)
 
-  if vim.v.shell_error ~= 0 then
-    vim.notify("Failed to create PR review:\n" .. result, vim.log.levels.ERROR)
-  else
-    vim.notify("PR review submitted: " .. event, vim.log.levels.INFO)
-
-    if opts and opts.clear_after_export then
-      comments.clear_path(path, { silent = true })
-    end
+  if not result then
+    return nil, submit_err or repo_err or "Unknown error"
   end
+
+  return true
 end
 
 return M
