@@ -397,6 +397,39 @@ function M.jump(direction)
   end
 end
 
+function M.remove_comments(ids, opts)
+  local wanted = {}
+  for _, id in ipairs(ids or {}) do
+    wanted[id] = true
+  end
+
+  for _, scope in ipairs(storage.list_scopes()) do
+    local data = storage.load_scope(scope.scope_root)
+    local kept = {}
+    local changed = false
+    for _, comment in ipairs(data.comments or {}) do
+      if wanted[comment.id] then
+        changed = true
+      else
+        kept[#kept + 1] = comment
+      end
+    end
+
+    if changed then
+      data.comments = kept
+      local ok, err = persist_scope_state(scope.scope_root, data)
+      if not ok then
+        if not (opts and opts.silent) then
+          vim.notify(err or "Failed to remove submitted review comments.", vim.log.levels.ERROR)
+        end
+        return nil, err
+      end
+    end
+  end
+
+  return true
+end
+
 function M.clear_path(path, opts)
   local silent = opts and opts.silent
   local comments_in_path, target_path, kind = M.list_comments_in_path(path)
