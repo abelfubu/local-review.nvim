@@ -579,3 +579,76 @@ describe("remote comment guards", function()
     assert.are.equal("first", comments[1].id)
   end)
 end)
+
+describe("comment_store.matching_path / partitions", function()
+  ---@param overrides table?
+  ---@return LocalReviewComment
+  local function path_comment(overrides)
+    return helpers.merge({
+      id = "c1",
+      absolute_path = "/repo/src/a.lua",
+      anchor = { line_number = 1, line_text = "x" },
+      line_end = 1,
+      created_at = "2024-01-01T00:00:00Z",
+      origin = "local",
+    }, overrides)
+  end
+
+  local function scopes_with(...)
+    local scopes = {}
+    for _, comments in ipairs({ ... }) do
+      table.insert(scopes, { data = { comments = comments } })
+    end
+    return scopes
+  end
+
+  it("matches exact file path", function()
+    local wanted = path_comment()
+    local other = path_comment({ id = "c2", absolute_path = "/repo/b.lua" })
+    local result = comment_store.matching_path(scopes_with({ wanted }, { other }), "/repo/src/a.lua", "file")
+    assert.are.equal(1, #result)
+    assert.are.equal("c1", result[1].id)
+  end)
+
+  it("matches comments within a directory", function()
+    local inside = path_comment()
+    local nested = path_comment({ id = "c2", absolute_path = "/repo/src/deep/b.lua" })
+    local outside = path_comment({ id = "c3", absolute_path = "/other/c.lua" })
+    local result = comment_store.matching_path(scopes_with({ inside, nested, outside }), "/repo/src", "directory")
+    assert.are.equal(2, #result)
+  end)
+
+  it("does not match sibling directories sharing a prefix", function()
+    local sibling = path_comment({ absolute_path = "/repo/src2/a.lua" })
+    local result = comment_store.matching_path(scopes_with({ sibling }), "/repo/src", "directory")
+    assert.are.equal(0, #result)
+  end)
+
+  it("returns results sorted by path then line", function()
+    local later = path_comment({ id = "c2", anchor = { line_number = 9, line_text = "x" } })
+    local earlier = path_comment({ id = "c1", anchor = { line_number = 2, line_text = "x" } })
+    local result = comment_store.matching_path(scopes_with({ later, earlier }), "/repo/src/a.lua", "file")
+    assert.are.equal("c1", result[1].id)
+    assert.are.equal("c2", result[2].id)
+  end)
+
+  it("partition_path splits matching from kept comments", function()
+    local hit = path_comment()
+    local miss = path_comment({ id = "c2", absolute_path = "/repo/b.lua" })
+    local matched, kept = comment_store.partition_path({ hit, miss }, "/repo/src/a.lua", "file")
+    assert.are.equal(1, #matched)
+    assert.are.equal("c1", matched[1].id)
+    assert.are.equal(1, #kept)
+    assert.are.equal("c2", kept[1].id)
+  end)
+
+  it("partition_ids splits by id membership", function()
+    local a = path_comment({ id = "a" })
+    local b = path_comment({ id = "b" })
+    local matched, kept = comment_store.partition_ids({ a, b }, { b = true })
+    assert.are.equal(1, #matched)
+    assert.are.equal("b", matched[1].id)
+    assert.are.equal(1, #kept)
+    assert.are.equal("a", kept[1].id)
+  end)
+end)

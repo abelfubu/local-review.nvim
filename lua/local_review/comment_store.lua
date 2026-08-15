@@ -49,6 +49,77 @@ function M.ensure_comment_defaults(comment, generate_id)
   end
 end
 
+---Both paths must be absolute and normalized; `context` guarantees this at the
+---boundary (creation time for comments, query time for the target path).
+---@param dir string
+---@param path string
+---@return boolean
+local function is_within(dir, path)
+  return path == dir or path:sub(1, #dir + 1) == dir .. "/"
+end
+
+---@param comment LocalReviewComment
+---@param target_path string
+---@param kind "file"|"directory"
+---@return boolean
+local function matches_path(comment, target_path, kind)
+  if kind == "file" then
+    return comment.absolute_path == target_path
+  end
+  return is_within(target_path, comment.absolute_path)
+end
+
+---@param scopes { data: { comments: LocalReviewComment[]? } }[]
+---@param target_path string absolute, normalized
+---@param kind "file"|"directory"
+---@return LocalReviewComment[]
+function M.matching_path(scopes, target_path, kind)
+  local matches = {}
+  for _, scope in ipairs(scopes) do
+    for _, comment in ipairs(scope.data.comments or {}) do
+      if matches_path(comment, target_path, kind) then
+        table.insert(matches, comment)
+      end
+    end
+  end
+
+  table.sort(matches, M.comment_sorter)
+  return matches
+end
+
+---Splits one comment list into those matching the path and those to keep.
+---@param comments LocalReviewComment[]
+---@param target_path string absolute, normalized
+---@param kind "file"|"directory"
+---@return LocalReviewComment[] matched, LocalReviewComment[] kept
+function M.partition_path(comments, target_path, kind)
+  local matched, kept = {}, {}
+  for _, comment in ipairs(comments) do
+    if matches_path(comment, target_path, kind) then
+      table.insert(matched, comment)
+    else
+      table.insert(kept, comment)
+    end
+  end
+  return matched, kept
+end
+
+---Splits one comment list by id membership (e.g. post-submit cleanup).
+---@param comments LocalReviewComment[]
+---@param ids table<string, boolean>
+---@return LocalReviewComment[] matched, LocalReviewComment[] kept
+function M.partition_ids(comments, ids)
+  local matched, kept = {}, {}
+  for _, comment in ipairs(comments) do
+    if ids[comment.id] then
+      table.insert(matched, comment)
+    else
+      table.insert(kept, comment)
+    end
+  end
+  return matched, kept
+end
+
 ---@param line integer
 ---@param lines string[]
 ---@return integer

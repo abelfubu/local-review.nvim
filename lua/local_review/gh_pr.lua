@@ -1,13 +1,16 @@
-local comments = require("local_review.comments")
 local context = require("local_review.context")
+local storage = require("local_review.storage")
+local store = require("local_review.comment_store")
 
 local M = {}
 
 local function run(command, cwd)
   local result = vim.system(command, { cwd = cwd, text = true }):wait()
+
   if result.code ~= 0 then
     return nil, vim.trim(result.stderr or result.stdout or "")
   end
+
   return vim.trim(result.stdout or "")
 end
 
@@ -92,7 +95,24 @@ end
 ---@param path string?
 ---@param opts table
 function M.create_review(path, opts)
-  local path_comments, target_path = comments.list_comments_in_path(path)
+  local target = path
+  if target == nil or target == "" then
+    target = context.default_export_root()
+  end
+
+  local kind, normalized_or_err = context.path_kind(target)
+  if not kind then
+    vim.notify(normalized_or_err, vim.log.levels.WARN)
+    return
+  end
+  local target_path = normalized_or_err
+
+  local repo_root, scope_err = context.scope_root(target_path)
+  if not repo_root then
+    vim.notify(scope_err or "Failed to determine the comment scope.", vim.log.levels.WARN)
+    return
+  end
+  local path_comments = storage.comments_for_path(repo_root, target_path, kind)
 
   if not path_comments or #path_comments == 0 then
     vim.notify("No comments to submit", vim.log.levels.WARN)
@@ -106,7 +126,12 @@ function M.create_review(path, opts)
     end
   end
 
-  local repo_root = context.scope_root(target_path)
+  local submittable_comments = store.submittable(path_comments)
+  if #submittable_comments == 0 then
+    vim.notify("No comments to submit", vim.log.levels.WARN)
+    return
+  end
+
   local pr_info, err = get_pr_info(repo_root)
   if not pr_info then
     vim.notify(err or "No PR found for current branch. Create one first:\n  gh pr create", vim.log.levels.ERROR)
@@ -115,7 +140,7 @@ function M.create_review(path, opts)
 
   prompt_review_type(function(event)
     prompt_review_body(event, function(_, body)
-      local ok, submit_err = M.submit_review(path_comments, event, body, pr_info, repo_root)
+      local ok, submit_err = M.submit_review(submittable_comments, event, body, pr_info, repo_root)
       if not ok then
         vim.notify("Failed to create PR review:\n" .. submit_err, vim.log.levels.ERROR)
         return
@@ -124,10 +149,10 @@ function M.create_review(path, opts)
       vim.notify("PR review submitted: " .. event, vim.log.levels.INFO)
       if opts and opts.clear_after_export then
         local submitted_ids = {}
-        for _, comment in ipairs(path_comments) do
+        for _, comment in ipairs(submittable_comments) do
           submitted_ids[#submitted_ids + 1] = comment.id
         end
-        local cleared, clear_err = comments.remove_comments(submitted_ids, { silent = true })
+        local cleared, clear_err = storage.remove_comments_by_ids(repo_root, submitted_ids)
         if not cleared then
           vim.notify("Failed to clear submitted comments: " .. (clear_err or "Unknown error"), vim.log.levels.ERROR)
         end

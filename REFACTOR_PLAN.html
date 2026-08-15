@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>local-review.nvim — Layer Refactor Plan</title>
+<style>
+  :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8b949e; --accent:#58a6ff; --ok:#3fb950; --warn:#d29922; --err:#f85149; --card:#161b22; --border:#30363d; }
+  * { box-sizing: border-box; }
+  body { background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system, "SF Mono", Menlo, monospace; max-width:960px; margin:0 auto; padding:32px 24px 96px; }
+  h1 { font-size:24px; border-bottom:1px solid var(--border); padding-bottom:12px; }
+  h2 { font-size:19px; margin-top:48px; color:var(--accent); }
+  h3 { font-size:16px; margin-top:28px; }
+  code, pre { font-family:"SF Mono", Menlo, monospace; }
+  pre { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; overflow-x:auto; font-size:13px; }
+  code { background:var(--card); padding:1px 5px; border-radius:4px; font-size:13px; }
+  pre code { background:none; padding:0; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:18px 20px; margin:14px 0; }
+  .tag { display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:10px; vertical-align:middle; margin-left:8px; }
+  .domain { background:#1f6feb33; color:var(--accent); }
+  .infra { background:#d2992233; color:var(--warn); }
+  .app { background:#3fb95033; color:var(--ok); }
+  .pres { background:#f8514933; color:var(--err); }
+  .new { color:var(--ok); font-weight:600; }
+  .moved { color:var(--warn); font-weight:600; }
+  .deleted { color:var(--err); text-decoration:line-through; }
+  ul.todo { list-style:none; padding-left:4px; }
+  ul.todo li { margin:7px 0; }
+  ul.todo li::before { content:""; }
+  label { display:flex; gap:10px; align-items:flex-start; cursor:pointer; }
+  input[type=checkbox] { margin-top:5px; accent-color:var(--accent); transform:scale(1.2); }
+  .done label { color:var(--muted); text-decoration:line-through; }
+  .arrow { color:var(--muted); }
+  table { border-collapse:collapse; width:100%; margin:12px 0; }
+  th, td { border:1px solid var(--border); padding:8px 12px; text-align:left; font-size:13px; vertical-align:top; }
+  th { background:var(--card); }
+  .progress { position:fixed; top:0; left:0; height:4px; background:var(--accent); width:0; transition:width .2s; z-index:10; }
+  .note { border-left:3px solid var(--warn); padding:6px 14px; color:var(--muted); margin:14px 0; }
+  .deep { border-left:3px solid var(--accent); padding:6px 14px; color:var(--muted); margin:14px 0; }
+</style>
+</head>
+<body>
+<div class="progress" id="bar"></div>
+
+<h1>🧱 local-review.nvim — Layer Refactor</h1>
+<p style="color:var(--muted)">Goal: fix the layer violation (<code>export</code>/<code>gh_pr</code> → <code>comments</code>) by making
+each module a <b>deep module</b>: a small interface hiding substantial functionality. Rules flow down, never up.</p>
+
+<h2>1 · Layer map (target state)</h2>
+<pre><code>presentation  <span style="color:#f85149">init · ui · markers · telescope</span>        → keymaps, windows, signs, pickers
+application   <span style="color:#3fb950">comments · export · gh_pr · gh_pr_comments</span> → workflows, orchestration
+infrastructure<span style="color:#d29922"> storage · context</span>                     → persistence, paths, repo root
+domain        <span style="color:#58a6ff">comment_store · positioning</span>            → vim-free rules (busted-tested)</code></pre>
+<div class="deep">📐 <b>Deep module test</b> (Ousterhout): the interface should be much smaller than the implementation behind it.
+<code>storage</code> exposes ~6 functions but hides: scope file layout, sha256 filenames, LWW merging, JSON, normalization-at-boundary.
+<code>comment_store</code> exposes rules but hides anchoring, reconciliation, sorting, remote policy.</div>
+
+<h2>2 · New &amp; moved functions</h2>
+
+<h3>comment_store.lua <span class="tag domain">domain</span> — gains pure matching rules</h3>
+<div class="card">
+<pre><code><span class="new">-- NEW — pure, busted-testable, no vim / no storage</span>
+<span class="new">---@param scopes { data: { comments: LocalReviewComment[] } }[]</span>
+<span class="new">---@param target_path string</span>
+<span class="new">---@param kind "file"|"directory"</span>
+<span class="new">---@return LocalReviewComment[]               -- sorted via comment_sorter</span>
+<span class="new">function M.matching_path(scopes, target_path, kind)</span>
+
+<span class="new">-- NEW — split one scope's list into (matched, kept) for removal</span>
+<span class="new">---@return LocalReviewComment[] matched, LocalReviewComment[] kept</span>
+<span class="new">function M.partition_path(comments, target_path, kind)</span>
+
+<span class="new">-- NEW — same, by id set (for post-submit cleanup)</span>
+<span class="new">---@param ids table&lt;string, boolean&gt;</span>
+<span class="new">---@return LocalReviewComment[] matched, LocalReviewComment[] kept</span>
+<span class="new">function M.partition_ids(comments, ids)</span>
+
+-- already there: upsert_comment · remove_comment · submittable
+-- is_remote · is_editable · comment_sorter · anchors/reconcile</code></pre>
+<div class="note">⚠️ Directory matching needs a path-prefix rule — reimplement it inline
+(<code>path:sub(1,#dir+1) == dir.."/"</code>). Do <b>not</b> import <code>context</code> from the domain layer.</div>
+</div>
+
+<h3>storage.lua <span class="tag infra">infra</span> — becomes the comment repository</h3>
+<div class="card">
+<pre><code>-- existing primitives: list_scopes · load_scope · save_scope · delete_scope
+
+<span class="new">-- NEW — "give me the comments for this path"</span>
+<span class="new">---@return LocalReviewComment[]</span>
+<span class="new">function M.comments_for_path(target_path, kind)</span>
+<span class="new">  -- = comment_store.matching_path(M.list_scopes(), target_path, kind)</span>
+
+<span class="new">-- NEW — remove + persist, only scopes that changed</span>
+<span class="new">---@return LocalReviewComment[] removed, string? err</span>
+<span class="new">function M.remove_comments_for_path(target_path, kind)</span>
+
+<span class="new">-- NEW — id-based variant (gh_pr post-submit cleanup)</span>
+<span class="new">---@param ids string[]</span>
+<span class="new">---@return integer removed_count, string? err</span>
+<span class="new">function M.remove_comments_by_ids(ids)</span>
+
+<span class="moved">-- CHANGED — normalization moves INTO the IO boundary</span>
+<span class="moved">function M.load_scope(scope_root)</span>
+<span class="moved">  -- after decode: ensure_comment_defaults(comment) for each</span></code></pre>
+<div class="deep">📐 After this, <code>storage</code> is the <i>only</i> module that knows comments live in per-scope JSON files.
+Every consumer receives normalized, sorted, domain-valid comments. That's the deep module.</div>
+</div>
+
+<h3>comments.lua <span class="tag app">application</span> — shrinks to buffer workflows</h3>
+<div class="card">
+<pre><code><span class="deleted">list_comments_in_path        -- MOVES OUT (split: context + storage)</span>
+<span class="deleted">comments_matching_path       -- DELETED (now comment_store.matching_path)</span>
+<span class="deleted">remove_matching_comments     -- DELETED (now storage.remove_comments_for_path)</span>
+<span class="deleted">remove_comments              -- DELETED (now storage.remove_comments_by_ids)</span>
+<span class="deleted">clear_path                   -- DELETED (export calls storage directly)</span>
+
+-- KEEPS (genuinely buffer-coupled):
+set_line_comment · delete_line_comment · delete_current_line
+comments_for_buffer · get_line_state · jump · reconcile_buffer_state</code></pre>
+</div>
+
+<h3>export.lua / gh_pr.lua <span class="tag app">application</span> — rewire</h3>
+<div class="card">
+<pre><code><span class="moved">-- BEFORE</span>
+<span class="moved">comments.list_comments_in_path(path)</span>
+
+<span class="new">-- AFTER — resolve via context, query via storage</span>
+<span class="new">local target = (path and path ~= "") and path or context.default_export_root()</span>
+<span class="new">local kind, normalized = context.path_kind(target)</span>
+<span class="new">local path_comments = storage.comments_for_path(normalized, kind)</span></code></pre>
+</div>
+
+<h2>3 · Execution checklist</h2>
+
+<ul class="todo" id="steps">
+  <li data-k="s1"><label><input type="checkbox"><span><b>Step 1 — Red.</b> Write <code>matching_path</code> / <code>partition_path</code> / <code>partition_ids</code> tests in <code>comment_store_spec.lua</code> (file match, directory match, sort order, partition keeps non-matching). <code>./scripts/test.sh</code> must fail.</span></label></li>
+  <li data-k="s2"><label><input type="checkbox"><span><b>Step 2 — Green.</b> Implement the three pure functions in <code>comment_store.lua</code>. Inline the directory-prefix rule; no new requires.</span></label></li>
+  <li data-k="s3"><label><input type="checkbox"><span><b>Step 3 — Storage composition.</b> Add <code>comments_for_path</code>, <code>remove_comments_for_path</code>, <code>remove_comments_by_ids</code> to <code>storage.lua</code>, delegating matching to <code>comment_store</code>. Save only changed scopes.</span></label></li>
+  <li data-k="s4"><label><input type="checkbox"><span><b>Step 4 — Normalize at boundary.</b> Call <code>ensure_comment_defaults</code> inside <code>load_scope</code>; delete scattered <code>ensure_defaults</code> calls in <code>comments.lua</code> read paths. Suite stays green.</span></label></li>
+  <li data-k="s5"><label><input type="checkbox"><span><b>Step 5 — Rewire.</b> <code>export.lua</code> and <code>gh_pr.lua</code>: replace <code>comments.list_comments_in_path</code> with context+storage composition; clear/remove go to storage. Notifications stay in the callers.</span></label></li>
+  <li data-k="s6"><label><input type="checkbox"><span><b>Step 6 — Delete.</b> Remove the dead helpers from <code>comments.lua</code> (<code>list_comments_in_path</code>, <code>comments_matching_path</code>, <code>remove_matching_comments</code>, <code>remove_comments</code>, <code>clear_path</code>).</span></label></li>
+  <li data-k="s7"><label><input type="checkbox"><span><b>Step 7 — Verify edges.</b> <code>grep -rn 'require("local_review.comments")' lua/</code> → only <code>init</code>, <code>ui</code>, <code>markers</code>, <code>telescope</code> (presentation) remain. No app→app edges.</span></label></li>
+  <li data-k="s8"><label><input type="checkbox"><span><b>Step 8 — Gate + commit.</b> <code>test.sh && typecheck.sh && stylua --check lua/ tests/</code> → commit <code>"refactor: move path queries to storage, matching rules to comment store"</code>.</span></label></li>
+</ul>
+
+<h2>4 · Deferred (not now)</h2>
+<table>
+  <tr><th>Item</th><th>Trigger</th></tr>
+  <tr><td><code>editor.lua</code> vim adapter (buffer/cursor/register access out of <code>comments.lua</code>)</td><td>First busted test that needs to stub a workflow's vim calls (likely Phase 5)</td></tr>
+  <tr><td><code>markers ↔ ui</code> circular require</td><td>Next time either file is touched; move the shared helper so the edge is one-way</td></tr>
+  <tr><td>Folder-per-layer (<code>domain/</code>, <code>app/</code>…)</td><td>15–20+ modules or a second maintainer</td></tr>
+</table>
+
+<script>
+  const boxes = document.querySelectorAll('input[type=checkbox]');
+  const saved = JSON.parse(localStorage.getItem('lr-refactor') || '{}');
+  boxes.forEach(b => {
+    const li = b.closest('li');
+    const k = li.dataset.k;
+    b.checked = !!saved[k];
+    li.classList.toggle('done', b.checked);
+    b.addEventListener('change', () => {
+      saved[k] = b.checked;
+      localStorage.setItem('lr-refactor', JSON.stringify(saved));
+      li.classList.toggle('done', b.checked);
+      update();
+    });
+  });
+  function update() {
+    const done = [...boxes].filter(b => b.checked).length;
+    document.getElementById('bar').style.width = (done / boxes.length * 100) + '%';
+  }
+  update();
+</script>
+</body>
+</html>

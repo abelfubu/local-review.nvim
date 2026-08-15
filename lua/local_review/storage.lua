@@ -1,3 +1,5 @@
+local comment_store = require("local_review.comment_store")
+
 local M = {}
 
 local function opts()
@@ -10,6 +12,72 @@ end
 
 local function scope_key(scope_root)
   return vim.fn.sha256(scope_root)
+end
+
+---@param scope_root string
+---@param target_path string absolute and normalized
+---@param kind "file"|"directory"
+---@return LocalReviewComment[]
+function M.comments_for_path(scope_root, target_path, kind)
+  return comment_store.matching_path({ { data = M.load_scope(scope_root) } }, target_path, kind)
+end
+
+---Keeps remote comments (read-only policy), persists the kept list and
+---deletes the scope file when no comments remain.
+---@param scope_root string
+---@param data table scope data with a comments array
+---@param matched LocalReviewComment[]
+---@param kept LocalReviewComment[]
+---@return LocalReviewComment[]? removed, string? err
+local function apply_removal(scope_root, data, matched, kept)
+  local removable = {}
+  for _, comment in ipairs(matched) do
+    if comment_store.is_editable(comment) then
+      table.insert(removable, comment)
+    else
+      table.insert(kept, comment)
+    end
+  end
+
+  if #removable == 0 then
+    return {}, nil
+  end
+
+  data.comments = kept
+  if #kept == 0 then
+    if not M.delete_scope(scope_root) then
+      return nil, "Failed to delete the empty review scope."
+    end
+  else
+    local ok, err = M.save_scope(scope_root, data)
+    if not ok then
+      return nil, err
+    end
+  end
+  return removable, nil
+end
+
+---@param scope_root string
+---@param target_path string absolute and normalized
+---@param kind "file"|"directory"
+---@return LocalReviewComment[]? removed, string? err
+function M.remove_comments_for_path(scope_root, target_path, kind)
+  local data = M.load_scope(scope_root)
+  local matched, kept = comment_store.partition_path(data.comments or {}, target_path, kind)
+  return apply_removal(scope_root, data, matched, kept)
+end
+
+---@param scope_root string
+---@param ids string[]
+---@return LocalReviewComment[]? removed, string? err
+function M.remove_comments_by_ids(scope_root, ids)
+  local wanted = {}
+  for _, id in ipairs(ids) do
+    wanted[id] = true
+  end
+  local data = M.load_scope(scope_root)
+  local matched, kept = comment_store.partition_ids(data.comments or {}, wanted)
+  return apply_removal(scope_root, data, matched, kept)
 end
 
 ---@class LocalReviewStorageState
@@ -143,27 +211,6 @@ function M.delete_scope(scope_root)
   end
 
   return true
-end
-
-function M.list_scopes()
-  local base = opts().storage_dir
-  ensure_dir(base)
-
-  local paths = vim.fn.glob(vim.fs.joinpath(base, "*.json"), false, true)
-  local scopes = {}
-  for _, path in ipairs(paths) do
-    local data = load_json(path)
-    local scope_root = data.scope_root
-    if type(scope_root) == "string" and scope_root ~= "" then
-      table.insert(scopes, {
-        scope_root = scope_root,
-        path = path,
-        data = data,
-      })
-    end
-  end
-
-  return scopes
 end
 
 return M
