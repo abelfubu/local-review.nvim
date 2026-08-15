@@ -115,7 +115,7 @@ local function scope_state_for_buffer(bufnr)
   }
 end
 
----@return LocalReviewComment?, boolean?
+---@return LocalReviewComment?, boolean?, string?
 local function upsert_comment(scope_state, ctx, line, body, line_end)
   local filetype = vim.bo[ctx.bufnr].filetype or ""
   return comment_store.upsert_comment(scope_state.data.comments, {
@@ -312,10 +312,9 @@ function M.set_line_comment(bufnr, line, body, range)
     line_end = math.max(range.start_line, range.end_line)
   end
 
-  local _, updated, error = upsert_comment(line_state.scope_state, line_state.ctx, anchor_line, trimmed, line_end)
-  if error then
-    vim.notify(error, vim.log.levels.INFO)
-    return nil, error
+  local _, updated, reason = upsert_comment(line_state.scope_state, line_state.ctx, anchor_line, trimmed, line_end)
+  if reason then
+    return nil, reason
   end
 
   local ok, err = persist_scope_state(line_state.ctx.scope_root, line_state.scope_state.data)
@@ -336,9 +335,8 @@ function M.delete_line_comment(bufnr, line)
   end
 
   local comments = line_state.scope_state.data.comments
-  local comment, reason = comment_store.remove_comment(comments, comments[line_state.index])
-  if not comment then
-    vim.notify(reason, vim.log.levels.INFO)
+  local removed, reason = comment_store.remove_comment(comments, comments[line_state.index])
+  if not removed then
     return nil, reason
   end
 
@@ -350,21 +348,26 @@ function M.delete_line_comment(bufnr, line)
 end
 
 function M.delete_current_line()
+  local line = vim.api.nvim_win_get_cursor(0)[1]
+
   local result = find_current_comment()
-  if not result then
-    return
+  local body
+  if result and result.index then
+    body = result.scope_state.data.comments[result.index].body
   end
 
-  if result.index == nil then
+  local status, err = M.delete_line_comment(0, line)
+  if not status then
+    vim.notify(err or "Failed to delete the review comment.", vim.log.levels.WARN)
+    return
+  end
+  if status == "missing" then
     vim.notify("No review comment on the current line.", vim.log.levels.INFO)
     return
   end
 
-  table.remove(result.scope_state.data.comments, result.index)
-  local ok, err = persist_scope_state(result.ctx.scope_root, result.scope_state.data)
-  if not ok then
-    vim.notify(err or "Failed to delete the review comment.", vim.log.levels.ERROR)
-    return
+  if body then
+    vim.fn.setreg('"', body)
   end
   vim.notify("Review comment deleted.", vim.log.levels.INFO)
 end

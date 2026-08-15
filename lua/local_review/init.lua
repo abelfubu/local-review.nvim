@@ -121,13 +121,7 @@ function M.setup(opts)
     end, { range = true })
 
     command("LocalReviewDelete", function()
-      local comments = require("local_review.comments")
-      local line = vim.api.nvim_win_get_cursor(0)[1]
-      local line_state = comments.get_line_state(0, line)
-      if line_state and line_state.comment then
-        vim.fn.setreg('"', line_state.comment.body)
-      end
-      comments.delete_current_line()
+      require("local_review.comments").delete_current_line()
     end, {})
 
     command("LocalReviewNext", function()
