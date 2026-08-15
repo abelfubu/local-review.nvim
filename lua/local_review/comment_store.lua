@@ -257,11 +257,16 @@ end
 
 ---@param comments LocalReviewComment[]
 ---@param opts UpsertCommentOpts
----@return LocalReviewComment, boolean
+---@return LocalReviewComment?, boolean?, string?
 function M.upsert_comment(comments, opts)
   opts = opts or {}
 
   local existing = M.find_comment_at_line(comments, opts.absolute_path, opts.line)
+
+  if existing and M.is_remote(existing) then
+    return nil, nil, "Remote comments are read-only"
+  end
+
   local resolved_line = M.clamp_line(opts.line, opts.lines)
   local resolved_end = M.clamp_line(math.max(opts.line, opts.line_end or opts.line), opts.lines)
 
@@ -303,6 +308,24 @@ function M.upsert_comment(comments, opts)
   end
   table.insert(comments, comment)
   return comment, false
+end
+
+---@param comments LocalReviewComment[]
+---@param comment LocalReviewComment
+---@return boolean?, string?
+function M.remove_comment(comments, comment)
+  if M.is_remote(comment) then
+    return nil, "Remote comments are read-only"
+  end
+
+  for i, c in pairs(comments) do
+    if c.id == comment.id then
+      table.remove(comments, i)
+      return true, nil
+    end
+  end
+
+  return false, "Comment not found"
 end
 
 ---@param a LocalReviewComment

@@ -123,6 +123,7 @@ local function persist(opts)
     start_line = state.source_line_start or state.source_line,
     end_line = state.source_line,
   })
+
   if not result then
     vim.notify(err or "Failed to save the review comment.", vim.log.levels.ERROR)
     return false
@@ -149,7 +150,7 @@ function M.close_active()
     return true
   end
 
-  if is_dirty() and not persist({ silent = true }) then
+  if is_dirty() and not persist() then
     return false
   end
 

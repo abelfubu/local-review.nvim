@@ -1,4 +1,4 @@
----@diagnostic disable: undefined-global, undefined-field
+---@diagnostic disable: undefined-global, undefined-field, need-check-nil
 require("busted.runner")()
 
 package.path = table.concat({
@@ -495,5 +495,87 @@ describe("remote comments", function()
     assert.is_true(#comment_store.submittable({ make_comment({ origin = "local" }) }) > 0)
     assert.is_false(#comment_store.submittable({ make_comment({}) }) > 0)
     assert.is_true(#comment_store.submittable({ make_comment({}), make_comment({ origin = "local" }) }) > 0)
+  end)
+end)
+
+describe("remote comment guards", function()
+  ---@param overrides table?
+  ---@return LocalReviewComment
+  local function make_remote_comment(overrides)
+    return helpers.merge({
+      id = "remote-1",
+      absolute_path = "/fake/path.lua",
+      relative_path = "path.lua",
+      body = "github body",
+      created_at = "2024-01-01T00:00:00Z",
+      updated_at = "2024-01-01T00:00:00Z",
+      source_kind = "github",
+      source_meta = {},
+      stale = false,
+      origin = "github",
+      anchor = { line_number = 5, line_text = "five" },
+      line_end = 5,
+    }, overrides)
+  end
+
+  it("refuses to upsert over a remote comment", function()
+    local remote = make_remote_comment()
+    local comments = { remote }
+
+    local comment, updated, reason = comment_store.upsert_comment(comments, base_opts({ line = 5, body = "hijack" }))
+
+    assert.is_nil(comment)
+    assert.is_nil(updated)
+    assert.matches("read%-only", reason)
+    assert.are.equal("github body", remote.body)
+    assert.are.equal(5, remote.anchor.line_number)
+    assert.are.equal(1, #comments)
+  end)
+
+  it("still creates a local comment on a different line", function()
+    local comments = { make_remote_comment() }
+
+    local comment, updated, reason = comment_store.upsert_comment(comments, base_opts({ line = 7 }))
+
+    assert.is_not_nil(comment)
+    assert.is_false(updated)
+    assert.is_nil(reason)
+    assert.are.equal("local", comment.origin)
+    assert.are.equal(2, #comments)
+  end)
+
+  it("removes a local comment", function()
+    local comment = make_remote_comment({ origin = "local" })
+    local comments = { comment }
+
+    local ok, reason = comment_store.remove_comment(comments, comment)
+
+    assert.is_true(ok)
+    assert.is_nil(reason)
+    assert.are.equal(0, #comments)
+  end)
+
+  it("refuses to remove a remote comment", function()
+    local remote = make_remote_comment()
+    local comments = { remote }
+
+    local ok, reason = comment_store.remove_comment(comments, remote)
+
+    assert.is_nil(ok)
+    assert.matches("read%-only", reason)
+    assert.are.equal(1, #comments)
+  end)
+
+  it("removes a local comment that is not first in the list", function()
+    local first = make_remote_comment({ origin = "local", id = "first" })
+    local second = make_remote_comment({ origin = "local", id = "second" })
+    local comments = { first, second }
+
+    local ok, reason = comment_store.remove_comment(comments, second)
+
+    assert.is_true(ok)
+    assert.is_nil(reason)
+    assert.are.equal(1, #comments)
+    assert.are.equal("first", comments[1].id)
   end)
 end)
