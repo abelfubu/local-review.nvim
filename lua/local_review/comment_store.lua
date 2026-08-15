@@ -1,18 +1,32 @@
 local M = {}
 
+---@class ReviewMetadata
+---@field repository string
+---@field pull_number integer
+---@field thread_id string
+---@field comment_id string
+---@field review_id string?
+---@field author string
+---@field url string
+---@field commit_id string?
+---@field resolved boolean
+---@field outdated boolean
+
 ---@class LocalReviewComment
----@field id string
 ---@field absolute_path string
----@field relative_path string
+---@field anchor LineAnchor
+---@field anchor_end LineAnchor?
 ---@field body string
 ---@field created_at string
----@field updated_at string
+---@field id string
+---@field line_end integer?
+---@field origin "github" | "local"
+---@field relative_path string
+---@field remote ReviewMetadata?
 ---@field source_kind string
 ---@field source_meta table
 ---@field stale boolean
----@field line_end integer?
----@field anchor LineAnchor
----@field anchor_end LineAnchor?
+---@field updated_at string
 
 ---@param comment LocalReviewComment
 ---@param generate_id (fun(): string)?
@@ -203,18 +217,43 @@ function M.reconcile_dual_anchor_comment(comment, lines, resolve, capture)
   return true
 end
 
+---@param comment LocalReviewComment
+---@return boolean
+function M.is_remote(comment)
+  return comment.origin == "github"
+end
+
+---@param comment LocalReviewComment
+---@return boolean
+function M.is_editable(comment)
+  return comment.origin == "local"
+end
+
+---@param comments LocalReviewComment[]
+---@return LocalReviewComment[]
+function M.submittable(comments)
+  local result = {}
+  for _, comment in pairs(comments) do
+    if M.is_editable(comment) then
+      table.insert(result, comment)
+    end
+  end
+
+  return result
+end
+
 ---@class UpsertCommentOpts
 ---@field absolute_path string
----@field relative_path string
----@field line integer
 ---@field body string
----@field line_end integer?
----@field lines string[]
----@field timestamp string
 ---@field capture fun(lines: string[], line: integer): LineAnchor
 ---@field generate_id fun(): string
+---@field line integer
+---@field line_end integer?
+---@field lines string[]
+---@field relative_path string
 ---@field source_kind string
 ---@field source_meta table?
+---@field timestamp string
 
 ---@param comments LocalReviewComment[]
 ---@param opts UpsertCommentOpts
@@ -248,7 +287,7 @@ function M.upsert_comment(comments, opts)
     id = opts.generate_id(),
     absolute_path = opts.absolute_path,
     relative_path = opts.relative_path,
-
+    origin = "local",
     body = opts.body,
     created_at = opts.timestamp,
     updated_at = opts.timestamp,

@@ -29,6 +29,7 @@ local function get_pr_info(repo_root)
   return decoded, nil
 end
 
+---@param callback fun(review_type: string)
 local function prompt_review_type(callback)
   vim.ui.select({ "Approve", "Comment", "Request Changes" }, {
     prompt = "Review type:",
@@ -50,6 +51,8 @@ local function prompt_review_type(callback)
   end)
 end
 
+---@param event string
+---@param callback fun(event: string, input: string)
 local function prompt_review_body(event, callback)
   local required = event == "COMMENT" or event == "REQUEST_CHANGES"
   local prompt = required and "Review summary (required): " or "Review summary (optional): "
@@ -86,6 +89,8 @@ local function to_github_comment(c)
   return entry
 end
 
+---@param path string?
+---@param opts table
 function M.create_review(path, opts)
   local path_comments, target_path = comments.list_comments_in_path(path)
 

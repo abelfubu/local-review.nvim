@@ -12,10 +12,7 @@ GitHub reviewer → LocalReviewGhPull → inline code comments → LocalReviewEx
 
 ## Starting point
 
-- Current prerequisite PR: https://github.com/abelfubu/local-review.nvim/pull/4
-- PR #4 fixes GitHub submission, repository selection, PR-head handling, selective cleanup, and split editor placement.
-- Start this feature from `main` after PR #4 merges, or explicitly branch from `fix/gh-review-and-split-editor` while it remains open.
-- Do not add this feature to PR #4.
+- Prerequisite PR #4 is merged (`fix/gh-review-and-split-editor`). Branch this feature from `main`.
 
 ## MVP scope
 
@@ -52,13 +49,12 @@ Keep synchronization explicit and read-only.
 
 Fetched feedback must never be treated as a local review draft.
 
-Suggested model:
+Suggested model (named `ReviewMetadata`, provider-agnostic so GitLab/Azure can reuse it later; `origin` grows new values per provider):
 
 ```lua
----@class LocalReviewOrigin
----@field kind "local"|"github"
+---@alias LocalReviewOrigin "local"|"github"
 
----@class GitHubReviewMetadata
+---@class ReviewMetadata
 ---@field repository string
 ---@field pull_number integer
 ---@field thread_id string
@@ -106,11 +102,14 @@ Fetch enough data to identify and render:
 
 - Repository and PR number
 - Thread ID
-- Resolution/outdated state
+- Resolution/outdated state (`isResolved`, `isOutdated`)
 - File path
-- Current/original line and range information
+- Current/original line and range (`line`/`originalLine`, `startLine`/`originalStartLine`)
 - Diff side
+- Diff hunk (`diffHunk`) — this is the textual anchor; review comments carry no blob SHA
 - Comment ID, body, author, URL and commit/review identity
+
+Keep the GraphQL query as a single const string in the adapter module, and validate required fields at runtime, aborting with a clear error if any are missing (schema drift guard).
 
 Verify the live GraphQL schema before finalizing field names. Do not infer resolved state from the flat REST comments endpoint.
 
@@ -132,9 +131,11 @@ On every explicit pull:
 2. Upsert fetched remote comments by remote identity.
 3. Preserve all local comments.
 4. Preserve GitHub comments belonging to other PRs.
-5. Remove or mark remote comments from this PR that are now resolved or absent, according to a documented policy.
-6. Never overwrite local comment bodies.
-7. Persist only after a complete successful fetch; API failure must leave existing state unchanged.
+5. Mark remote comments from this PR that are now resolved or absent from the fetch as resolved/stale. Never delete remote comments during sync — an unresolved-only query cannot distinguish resolved from deleted or moved-off-diff. An explicit purge command may be added later.
+6. Never overwrite local comment bodies. Remote comment bodies edited on GitHub should be updated in place.
+7. Persist only after a complete successful fetch; API failure must leave existing state unchanged. Write to a temp file and atomically rename (`storage.lua` currently does a plain `writefile`).
+8. On HTTP 403/429 or rate-limit errors, retry with exponential backoff and surface a clear error. Do not cache fetch results — caching would make freshly resolved threads appear unresolved.
+9. Namespace persisted remote comments by `(repository, pull_number)` so preserving other PRs' comments is structural, not just a filter.
 
 Avoid path-wide clearing. Concurrently created local comments must survive synchronization.
 
@@ -145,9 +146,9 @@ GitHub line numbers refer to a PR commit/diff, not necessarily the current worki
 Safe mapping order:
 
 1. Use GitHub path and current line/range when they match the checked-out PR head.
-2. Capture textual context/diff context as anchors.
-3. Reuse the existing positioning resolver to reconcile against the working tree.
-4. If mapping is ambiguous or missing, mark the remote comment stale/outdated.
+2. Capture the `diffHunk` and original line/range as anchors.
+3. Reuse the existing dual-anchor resolver (`comment_store.reconcile_dual_anchor_comment`) to reconcile against the working tree.
+4. Trust GitHub's `isOutdated` flag rather than recomputing drift. If mapping is additionally ambiguous or missing locally, mark the remote comment stale.
 5. Never silently guess a different line.
 
 Display stale/outdated GitHub feedback, but make the state obvious.

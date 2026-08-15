@@ -8,6 +8,7 @@ package.path = table.concat({
 }, ";")
 
 local comment_store = require("local_review.comment_store")
+local helpers = require("tests.helpers.helpers")
 
 ---@return fun(): string
 local function id_generator()
@@ -44,6 +45,7 @@ local function base_opts(overrides)
     generate_id = generate_id,
     source_kind = "test",
     source_meta = {},
+    origin = "local",
   }
 
   if overrides then
@@ -75,6 +77,7 @@ describe("comment_store.upsert_comment", function()
     assert.are.equal(opts.timestamp, comment.created_at)
     assert.are.equal(opts.timestamp, comment.updated_at)
     assert.are.equal("1", comment.id)
+    assert.are.equal("local", comment.origin)
   end)
 
   it("creates a range comment", function()
@@ -468,5 +471,29 @@ describe("comment_store dual-anchor reconcile", function()
     assert.are.equal(2, comment.anchor.line_number)
     assert.are.equal(8, comment.anchor_end.line_number)
     assert.are.equal(8, comment.line_end)
+  end)
+end)
+
+describe("remote comments", function()
+  ---@param overrides table
+  ---@return LocalReviewComment
+  local function make_comment(overrides)
+    return helpers.merge({ origin = "github" }, overrides)
+  end
+
+  it("checks for a remote comment", function()
+    assert.is_false(comment_store.is_remote(make_comment({ origin = "local" })))
+    assert.is_true(comment_store.is_remote(make_comment({})))
+  end)
+
+  it("checks for an editable comment", function()
+    assert.is_true(comment_store.is_editable(make_comment({ origin = "local" })))
+    assert.is_false(comment_store.is_editable(make_comment({})))
+  end)
+
+  it("checks for a submitable review session", function()
+    assert.is_true(#comment_store.submittable({ make_comment({ origin = "local" }) }) > 0)
+    assert.is_false(#comment_store.submittable({ make_comment({}) }) > 0)
+    assert.is_true(#comment_store.submittable({ make_comment({}), make_comment({ origin = "local" }) }) > 0)
   end)
 end)
