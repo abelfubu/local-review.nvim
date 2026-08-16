@@ -225,12 +225,11 @@ local function find_line_comment(bufnr, line)
 end
 
 ---Return true if a session remote occupies any line in the range.
----@param scope_state table
 ---@param ctx table
 ---@param line integer
 ---@param line_end integer?
 ---@return boolean
-local function session_remote_at_line(scope_state, ctx, line, line_end)
+local function session_remote_at_line(ctx, line, line_end)
   local session_comments = gh_session.comments_for_path(ctx.scope_root, ctx.absolute_path, "file")
   if #session_comments == 0 then
     return false
@@ -329,7 +328,7 @@ function M.set_line_comment(bufnr, line, body, range)
     return "noop"
   end
 
-  if session_remote_at_line(line_state.scope_state, line_state.ctx, anchor_line, line_end) then
+  if session_remote_at_line(line_state.ctx, anchor_line, line_end) then
     return nil, "Remote comments are read-only"
   end
 
