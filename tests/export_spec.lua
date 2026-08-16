@@ -8,7 +8,8 @@ package.path = table.concat({
 }, ";")
 
 describe("export", function()
-  local path_comments
+  local local_comments
+  local session_comments
   local removed_comments
   local remove_args
   local saved_scopes
@@ -16,7 +17,8 @@ describe("export", function()
   local notifications
 
   before_each(function()
-    path_comments = {}
+    local_comments = {}
+    session_comments = {}
     removed_comments = {}
     remove_args = nil
     saved_scopes = {}
@@ -24,7 +26,7 @@ describe("export", function()
     notifications = {}
 
     package.loaded["local_review.application.export"] = nil
-    package.loaded["local_review.application.comments"] = nil
+    package.loaded["local_review.application.gh_session"] = nil
     package.loaded["local_review.infrastructure.storage"] = nil
     package.loaded["local_review.infrastructure.context"] = nil
     package.loaded["local_review"] = nil
@@ -42,16 +44,19 @@ describe("export", function()
       }
     end
 
-    package.preload["local_review.application.comments"] = function()
+    package.preload["local_review.application.gh_session"] = function()
       return {
-        list_comments_in_path = function(path)
-          return path_comments, path, "directory", "/repo"
+        comments_for_path = function(_scope_root, _path, _kind)
+          return session_comments
         end,
       }
     end
 
     package.preload["local_review.infrastructure.storage"] = function()
       return {
+        comments_for_path = function(_scope_root, _path, _kind)
+          return local_comments
+        end,
         remove_comments_for_path = function(scope_root, path, kind)
           remove_args = { scope_root = scope_root, path = path, kind = kind }
           return removed_comments, nil
@@ -111,11 +116,11 @@ describe("export", function()
 
   after_each(function()
     package.preload["local_review"] = nil
-    package.preload["local_review.application.comments"] = nil
+    package.preload["local_review.application.gh_session"] = nil
     package.preload["local_review.infrastructure.storage"] = nil
     package.preload["local_review.infrastructure.context"] = nil
     package.loaded["local_review"] = nil
-    package.loaded["local_review.application.comments"] = nil
+    package.loaded["local_review.application.gh_session"] = nil
     package.loaded["local_review.infrastructure.storage"] = nil
     package.loaded["local_review.infrastructure.context"] = nil
     package.loaded["local_review.application.export"] = nil
@@ -185,7 +190,8 @@ describe("export", function()
   end
 
   it("includes local and remote comments in export", function()
-    path_comments = { local_comment({ body = "Local note." }), remote_comment() }
+    local_comments = { local_comment({ body = "Local note." }) }
+    session_comments = { remote_comment() }
 
     local export = require("local_review.application.export")
     local text, err, count = export.path_export_text("/repo")
@@ -200,7 +206,7 @@ describe("export", function()
   end)
 
   it("formats remote comments with attribution and url", function()
-    path_comments = { remote_comment() }
+    session_comments = { remote_comment() }
 
     local export = require("local_review.application.export")
     local text = export.path_export_text("/repo")
@@ -216,7 +222,7 @@ describe("export", function()
   end)
 
   it("keeps local comments format unchanged", function()
-    path_comments = { local_comment() }
+    local_comments = { local_comment() }
 
     local export = require("local_review.application.export")
     local text = export.path_export_text("/repo")
@@ -228,8 +234,9 @@ describe("export", function()
   end)
 
   it("preserves remote comments when clearing after export", function()
-    path_comments = { local_comment(), remote_comment() }
-    removed_comments = { path_comments[1] }
+    local_comments = { local_comment() }
+    session_comments = { remote_comment() }
+    removed_comments = { local_comments[1] }
 
     local export = require("local_review.application.export")
     export.open_export("/repo", { clear_after_export = true })

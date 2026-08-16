@@ -1,9 +1,9 @@
 local M = {}
 
 local context = require("local_review.infrastructure.context")
-local comments = require("local_review.application.comments")
 local storage = require("local_review.infrastructure.storage")
 local store = require("local_review.domain.comment_store")
+local gh_session = require("local_review.application.gh_session")
 local export_indent_width = 3
 local export_indent = string.rep(" ", export_indent_width)
 
@@ -15,10 +15,10 @@ local function display_path(root_path, kind, absolute_path)
   return context.relative_path(root_path, absolute_path) or absolute_path
 end
 
-local function get_exportable_comments(path_comments)
-  -- Export includes both local and remote (GitHub) comments. Remote comments
-  -- are rendered with attribution and a URL below the body.
-  return path_comments
+local function comments_for_path(scope_root, target_path, kind)
+  local locals = storage.comments_for_path(scope_root, target_path, kind)
+  local remotes = gh_session.comments_for_path(scope_root, target_path, kind)
+  return store.merge_sorted_comments(locals, remotes)
 end
 
 ---@param path string?
@@ -48,7 +48,7 @@ local function export_lines(path)
     return nil, resolve_err or "Failed to resolve export path."
   end
 
-  local exportable_comments, list_err = comments.list_comments_in_path(target.path)
+  local exportable_comments, list_err = comments_for_path(target.scope_root, target.path, target.kind)
   if not exportable_comments then
     return nil, list_err or "Failed to load comments."
   end

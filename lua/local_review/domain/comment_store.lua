@@ -380,4 +380,20 @@ function M.comment_sorter(a, b)
   return (a.created_at or "") < (b.created_at or "")
 end
 
+---Merge two comment lists into one sorted list.
+---@param a LocalReviewComment[]
+---@param b LocalReviewComment[]
+---@return LocalReviewComment[]
+function M.merge_sorted_comments(a, b)
+  local merged = {}
+  for _, comment in ipairs(a or {}) do
+    table.insert(merged, comment)
+  end
+  for _, comment in ipairs(b or {}) do
+    table.insert(merged, comment)
+  end
+  table.sort(merged, M.comment_sorter)
+  return merged
+end
+
 return M

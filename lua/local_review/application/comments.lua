@@ -117,16 +117,7 @@ local function union_comments_for_path(scope_root, target_path, kind)
   local locals = storage.comments_for_path(scope_root, target_path, kind)
   local remotes = gh_session.comments_for_path(scope_root, target_path, kind)
 
-  local merged = {}
-  for _, comment in ipairs(locals) do
-    table.insert(merged, comment)
-  end
-  for _, comment in ipairs(remotes) do
-    table.insert(merged, comment)
-  end
-
-  table.sort(merged, comment_store.comment_sorter)
-  return merged
+  return comment_store.merge_sorted_comments(locals, remotes)
 end
 
 ---Return the merged comment set for a buffer (local + session remotes).

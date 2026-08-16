@@ -21,8 +21,9 @@ application → presentation). Run it with the commit gate.
 1. **Downward only.** Presentation → application → infrastructure → domain.
 2. **No sideways edges in application.** `export` and `gh_pr` must not import `comments`;
    they compose `context` (path resolution) + `storage` (queries/mutations) + `comment_store` (rules).
-   `gh_pr_sync` is an allowed exception: it may compose `gh_pr` and `gh_pr_comments` to
-   orchestrate the `:LocalReviewGhPull` workflow.
+   `export` may also compose `gh_session` (the session store is an application-layer source of
+   remote comments). `gh_pr_sync` is an allowed exception: it may compose `gh_pr` and
+   `gh_pr_comments` to orchestrate the `:LocalReviewGhPull` workflow.
 3. **Domain never imports vim-coupled modules.** `comment_store` and `positioning` stay pure Lua
    so they run under busted without a Neovim instance. Domain functions declare preconditions
    (e.g. "paths are absolute and normalized"); infrastructure establishes them.
@@ -61,8 +62,8 @@ Buffer-coupled workflows: `set_line_comment`, `delete_line_comment`, `delete_cur
 flows live here.
 
 ### Application — `application/export.lua`
-Export policy and format: `get_exportable_comments` (what may be exported), agent-readable
-text, clipboard write, clear-after-export.
+Export policy and format: composes local storage + session remotes, produces
+agent-readable text, clipboard write, clear-after-export.
 
 ### Application — `application/gh_pr.lua`
 GitHub review submission: PR resolution, review prompt flow, `submit_review`,
