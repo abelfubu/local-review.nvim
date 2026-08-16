@@ -75,23 +75,27 @@ GitHub GraphQL adapter: fetches unresolved review threads and normalizes them in
 system boundary.
 
 ### Application — `application/gh_session.lua`
-In-memory session store for remote PR comments. Each pull replaces the whole
-per-scope set; comments are queried by branch and merged with persisted locals
-in read paths.
+In-memory session store for remote PR comments and review bodies. Each pull
+replaces the whole per-scope set; comments and reviews are queried by branch
+and merged with persisted locals in read paths.
 
-- `set(scope_root, comments, pull_number, branch)` — wholesale replacement of the
-  session set for a scope.
+- `set(scope_root, comments, reviews, pull_number, branch)` — wholesale replacement
+  of the session set for a scope.
 - `get(scope_root)` — raw session state for a scope.
 - `clear(scope_root)` — drop the session set.
 - `comments_for_path(scope_root, target_path, kind)` — branch-filtered query that
   unions session remotes with the current branch; comments from other branches are
   hidden until the matching branch is checked out.
+- `reviews_for_scope(scope_root)` — branch-filtered query for PR-level review
+  bodies; hidden when the current branch does not match the pulled branch.
 
 ### Application — `application/gh_pr_sync.lua`
 Read-only sync workflow: fetches via `gh_pr_comments.fetch`, validates the
 repository metadata, and delegates wholesale replacement of the in-memory
-session set to `gh_session.set`. Failed fetches leave any existing session state
-untouched; `pull` fires `LocalReviewChanged` only after a successful sync.
+session set (comments and review bodies) to `gh_session.set`. Failed fetches
+leave any existing session state untouched; `pull` fires `LocalReviewChanged`
+only after a successful sync and `LocalReviewReviews` when review bodies are
+present.
 
 ### Presentation
 - `init.lua` — keymaps and `:LocalReview*` commands only; no logic beyond argument parsing
@@ -119,6 +123,9 @@ untouched; `pull` fires `LocalReviewChanged` only after a successful sync.
 - **Session comments are branch-visible.** `gh_session.comments_for_path` shows only
   remotes whose recorded branch matches the current branch, so a stale session set
   from a switched branch does not leak into the current buffer.
+- **Session review bodies are branch-visible and read-only.** Like session comments,
+  PR-level review bodies live only in memory, are wholesale-replaced on each pull,
+  and are hidden when the current branch does not match the pulled branch.
 - **`remote.resolved`, `remote.outdated`, and `stale` are independent facts.**
   `remote.resolved` reflects GitHub resolution, `remote.outdated` reflects GitHub
   diff positioning, and `stale` reflects local buffer anchoring. Sync updates the

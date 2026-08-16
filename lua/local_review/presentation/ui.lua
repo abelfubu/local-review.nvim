@@ -663,6 +663,90 @@ function M.open_current_line(range)
   vim.cmd("startinsert!")
 end
 
+function M.open_reviews_split(reviews)
+  if not reviews or #reviews == 0 then
+    return
+  end
+
+  local lines = {}
+  for i, review in ipairs(reviews) do
+    local author = review.author or "unknown"
+    local state_text = review.state or "UNKNOWN"
+    local date = review.submitted_at and review.submitted_at:sub(1, 10) or "unknown"
+    table.insert(lines, string.format("## @%s · %s · %s", author, state_text, date))
+    table.insert(lines, "")
+    for _, body_line in ipairs(vim.split(review.body or "", "\n", { plain = true })) do
+      table.insert(lines, body_line)
+    end
+    table.insert(lines, "")
+    table.insert(lines, string.format("**URL:** <%s>", review.url or ""))
+
+    if i < #reviews then
+      table.insert(lines, "")
+      table.insert(lines, "---")
+      table.insert(lines, "")
+    end
+  end
+
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
+  vim.api.nvim_buf_set_name(bufnr, "local-review://gh-reviews")
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.bo[bufnr].modifiable = false
+
+  vim.cmd("vsplit")
+  local winid = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(winid, bufnr)
+
+  vim.wo[winid].wrap = true
+  vim.wo[winid].linebreak = true
+  vim.wo[winid].number = false
+  vim.wo[winid].relativenumber = false
+  vim.wo[winid].signcolumn = "no"
+  vim.wo[winid].statuscolumn = " "
+  vim.wo[winid].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:LocalReviewEditorTitle"
+
+  local ok, render = pcall(require, "render-markdown")
+  if ok and render and render.buf_enable then
+    render.buf_enable(bufnr)
+  end
+
+  local function map(modes, lhs, rhs, desc)
+    if lhs == nil or lhs == "" then
+      return
+    end
+    vim.keymap.set(modes, lhs, rhs, { buffer = bufnr, silent = true, nowait = true, desc = desc })
+  end
+
+  local opts = require("local_review").get_opts()
+  for _, keymap in ipairs(opts.comment_close_keys or {}) do
+    map(keymap.modes, keymap.key, function()
+      if vim.api.nvim_win_is_valid(winid) then
+        pcall(vim.api.nvim_win_close, winid, true)
+      end
+    end, "Local Review: Close reviews")
+  end
+  map("n", "<Esc>", function()
+    if vim.api.nvim_win_is_valid(winid) then
+      pcall(vim.api.nvim_win_close, winid, true)
+    end
+  end, "Local Review: Close reviews")
+
+  local group = vim.api.nvim_create_augroup("local-review-reviews-" .. bufnr, { clear = true })
+  vim.api.nvim_create_autocmd("BufWipeout", {
+    group = group,
+    buffer = bufnr,
+    callback = function()
+      if vim.api.nvim_win_is_valid(winid) then
+        pcall(vim.api.nvim_win_close, winid, true)
+      end
+    end,
+  })
+end
+
 function M.active_source_line(bufnr)
   if is_open() and state.source_bufnr == bufnr then
     return state.source_line

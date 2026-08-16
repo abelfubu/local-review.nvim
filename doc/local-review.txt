@@ -96,14 +96,16 @@ Comments can only be added to real file buffers. Scheme-prefixed buffers
                         repo).
 
                                                         *:LocalReviewGhPull*
-:LocalReviewGhPull     Fetch unresolved inline PR review comments from
-                        GitHub for the current branch and display them as
-                        read-only comments. Requires the `gh` CLI and a PR
-                        for the current branch.
+:LocalReviewGhPull     Fetch unresolved inline PR review comments and
+                        PR-level review bodies from GitHub for the current
+                        branch and display them as read-only comments. When
+                        review bodies are present, the same command
+                        auto-opens a read-only split with them. Requires the
+                        `gh` CLI and a PR for the current branch.
 
                                                        *:LocalReviewGhClear*
-:LocalReviewGhClear     Clear the in-memory pulled PR comments for the current
-                        scope.
+:LocalReviewGhClear     Clear the in-memory pulled PR comments and review
+                        bodies for the current scope.
 
                                                         *:LocalReviewList*
 :LocalReviewList [path] List comments under [path] in the quickfix list.
@@ -206,10 +208,11 @@ repos). Writes are guarded against concurrent Neovim instances: if the file
 changed on disk since it was loaded, comments are merged by id instead of
 overwritten.
 
-Pulled GitHub comments are session-temporal: they are kept in memory only,
-recorded against the branch checked out when `:LocalReviewGhPull` ran, and
-cleared when Neovim restarts or `:LocalReviewGhClear` is used. On a branch
-switch, pulled comments from another branch are hidden until you run
-`:LocalReviewGhPull` again on that branch.
+Pulled GitHub comments and review bodies are session-temporal: they are kept
+in memory only, recorded against the branch checked out when
+`:LocalReviewGhPull` ran, and cleared when Neovim restarts or
+`:LocalReviewGhClear` is used. On a branch switch, pulled comments and review
+bodies from another branch are hidden until you run `:LocalReviewGhPull` again
+on that branch. To view review bodies again, re-run `:LocalReviewGhPull`.
 
 vim:tw=78:ts=8:ft=help:norl:

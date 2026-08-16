@@ -14,7 +14,7 @@ Use the included [skill](./skills/local-review/SKILL.md) that tells agents how t
 
 ## Features
 
-- **GitHub PR review comments** — pull unresolved inline review threads with `:LocalReviewGhPull` and view them as read-only comments; cleared on `:LocalReviewGhClear` or when Neovim restarts
+- **GitHub PR review comments** — pull unresolved inline review threads with `:LocalReviewGhPull` and view them as read-only comments; `:LocalReviewGhPull` also fetches PR-level review bodies and auto-opens them in a read-only split when present. Both are cleared on `:LocalReviewGhClear` or when Neovim restarts
 - **Multi-line comments** — visually select lines, comment covers the range; every line gets a gutter sign, the box renders below the last line, export shows `file.lua:3-5`
 - **Context anchors** — comments follow the code when the file changes; both ends of a range are anchored independently
 - **Stale detection** — when the anchored code is gone, the comment is marked stale (orange sign, `[stale]` in the title) instead of pointing at the wrong code
@@ -75,12 +75,12 @@ end, { desc = "Local Review Picker" })
 - `:LocalReviewNext` / `:LocalReviewPrev` jump between review comments in the current file and echo a one-line summary
 - `:LocalReviewExport [path]` copy review comments for a path to the system clipboard in a copy/paste-friendly format, then delete the exported comments if the clipboard copy succeeded. In headless mode the output is printed to stdout so agent skills can read it and the comments are still cleared. If path is omitted, it uses the current repo root when available, otherwise `cwd`.
 - `:LocalReviewExportPreserve [path]` copy review comments to the system clipboard without deleting them. In headless mode the output is printed to stdout. If path is omitted, it uses the current repo root when available, otherwise `cwd`.
-- `:LocalReviewGhPull` fetch unresolved inline PR review comments from GitHub for the current branch and display them as read-only comments
-- `:LocalReviewGhClear` clear the pulled PR comments for the current scope
+- `:LocalReviewGhPull` fetch unresolved inline PR review comments and PR-level review bodies from GitHub for the current branch and display them as read-only comments; when review bodies are present, the command auto-opens a read-only split with them. Requires the `gh` CLI and a PR for the current branch.
+- `:LocalReviewGhClear` clear the pulled PR comments and review bodies for the current scope
 - `:LocalReviewClear [path]` delete stored review comments for a path. If path is omitted, it uses the current repo root when available, otherwise `cwd`.
 - `:LocalReviewList [path]` list review comments in the quickfix list. If path is omitted, it uses the current repo root when available, otherwise `cwd`.
 
-Pulled GitHub comments are session-temporal: they live in memory only, are tied to the branch that was checked out when `:LocalReviewGhPull` ran, and disappear when Neovim restarts or when `:LocalReviewGhClear` is used. Switching branches hides pulled comments until you re-run `:LocalReviewGhPull` on the matching branch.
+Pulled GitHub comments and review bodies are session-temporal: they live in memory only, are tied to the branch that was checked out when `:LocalReviewGhPull` ran, and disappear when Neovim restarts or when `:LocalReviewGhClear` is used. Switching branches hides pulled comments and review bodies until you re-run `:LocalReviewGhPull` on the matching branch. To view review bodies again, re-run `:LocalReviewGhPull`.
 
 Comments can only be added to real file buffers; scheme-prefixed buffers (`diffview://`, `fugitive://`, `oil://`, ...) are rejected with a notification. The working-tree side of a diff is a real buffer and works fine.
 

@@ -58,7 +58,7 @@ describe("gh_session", function()
 
   describe("set / get / clear", function()
     it("stores fetched comments with metadata", function()
-      module.set("/repo", { make_comment() }, 42, "feature")
+      module.set("/repo", { make_comment() }, {}, 42, "feature")
       local session = module.get("/repo")
       assert.is_not_nil(session)
       assert.are.equal(1, #session.comments)
@@ -68,8 +68,8 @@ describe("gh_session", function()
     end)
 
     it("replaces an existing session set wholesale", function()
-      module.set("/repo", { make_comment({ id = "gh:old" }) }, 1, "main")
-      module.set("/repo", { make_comment({ id = "gh:new" }) }, 2, "feature")
+      module.set("/repo", { make_comment({ id = "gh:old" }) }, {}, 1, "main")
+      module.set("/repo", { make_comment({ id = "gh:new" }) }, {}, 2, "feature")
       local session = module.get("/repo")
       assert.are.equal(1, #session.comments)
       assert.are.equal("gh:new", session.comments[1].id)
@@ -78,7 +78,7 @@ describe("gh_session", function()
     end)
 
     it("clears the session state for a scope", function()
-      module.set("/repo", { make_comment() }, 42, "feature")
+      module.set("/repo", { make_comment() }, {}, 42, "feature")
       module.clear("/repo")
       assert.is_nil(module.get("/repo"))
     end)
@@ -86,7 +86,7 @@ describe("gh_session", function()
 
   describe("comments_for_path", function()
     it("returns matching session comments", function()
-      module.set("/repo", { make_comment({ absolute_path = "/repo/src/a.lua" }) }, 42, "feature")
+      module.set("/repo", { make_comment({ absolute_path = "/repo/src/a.lua" }) }, {}, 42, "feature")
       local matches = module.comments_for_path("/repo", "/repo/src/a.lua", "file")
       assert.are.equal(1, #matches)
     end)
@@ -97,21 +97,21 @@ describe("gh_session", function()
     end)
 
     it("filters by current branch", function()
-      module.set("/repo", { make_comment() }, 42, "feature")
+      module.set("/repo", { make_comment() }, {}, 42, "feature")
       current_branch = "other"
       local matches = module.comments_for_path("/repo", "/repo/src/a.lua", "file")
       assert.are.equal(0, #matches)
     end)
 
     it("includes comments when the branch matches", function()
-      module.set("/repo", { make_comment() }, 42, "feature")
+      module.set("/repo", { make_comment() }, {}, 42, "feature")
       current_branch = "feature"
       local matches = module.comments_for_path("/repo", "/repo/src/a.lua", "file")
       assert.are.equal(1, #matches)
     end)
 
     it("excludes comments when the branch cannot be determined", function()
-      module.set("/repo", { make_comment() }, 42, "feature")
+      module.set("/repo", { make_comment() }, {}, 42, "feature")
       current_branch = nil
       local matches = module.comments_for_path("/repo", "/repo/src/a.lua", "file")
       assert.are.equal(0, #matches)
@@ -122,9 +122,42 @@ describe("gh_session", function()
         make_comment({ absolute_path = "/repo/src/a.lua" }),
         make_comment({ absolute_path = "/repo/src/b.lua", id = "gh:c2" }),
         make_comment({ absolute_path = "/repo/test/c.lua", id = "gh:c3" }),
-      }, 42, "feature")
+      }, {}, 42, "feature")
       local matches = module.comments_for_path("/repo", "/repo/src", "directory")
       assert.are.equal(2, #matches)
+    end)
+  end)
+  describe("reviews_for_scope", function()
+    it("returns reviews when the branch matches", function()
+      local reviews = {
+        {
+          id = "review-1",
+          author = "reviewer",
+          state = "COMMENTED",
+          body = "Great work",
+          url = "https://example.com",
+          submitted_at = "2024-01-01T00:00:00Z",
+        },
+      }
+      module.set("/repo", {}, reviews, 1, "main")
+      current_branch = "main"
+
+      local result = module.reviews_for_scope("/repo")
+      assert.are.equal(1, #result)
+      assert.are.equal("Great work", result[1].body)
+    end)
+
+    it("hides reviews when the branch differs", function()
+      module.set("/repo", {}, { { id = "review-1", body = "secret" } }, 1, "main")
+      current_branch = "other"
+
+      local result = module.reviews_for_scope("/repo")
+      assert.are.equal(0, #result)
+    end)
+
+    it("returns an empty list when no session exists", function()
+      local result = module.reviews_for_scope("/missing")
+      assert.are.equal(0, #result)
     end)
   end)
 end)

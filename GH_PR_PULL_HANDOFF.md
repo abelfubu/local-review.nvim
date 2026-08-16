@@ -103,12 +103,13 @@ Normalization decisions:
 
 Sync rules (replace the in-memory session set):
 
-- Remote comments are session-temporal: each successful `:LocalReviewGhPull`
-  wholesale-replaces the per-scope, per-branch in-memory session set managed by
-  `application/gh_session.lua`.
+- Remote comments and PR-level review bodies are session-temporal: each successful
+  `:LocalReviewGhPull` wholesale-replaces the per-scope, per-branch in-memory
+  session set managed by `application/gh_session.lua`.
 - Failed fetches leave any existing session state untouched.
-- Session comments are branch-visible: `gh_session.comments_for_path` only returns
-  comments whose recorded branch matches the current branch.
+- Session comments and reviews are branch-visible: `gh_session.comments_for_path`
+  and `gh_session.reviews_for_scope` only return items whose recorded branch
+  matches the current branch.
 - `gh_pr_comments.fetch` performs validation/normalization and may skip
   non-line threads; skipped counts are surfaced to the user but do not affect
   replacement.

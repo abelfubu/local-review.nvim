@@ -194,6 +194,16 @@ function M.setup(opts)
       end,
     })
 
+    vim.api.nvim_create_autocmd("User", {
+      group = vim.api.nvim_create_augroup("local-review-reviews", { clear = true }),
+      pattern = "LocalReviewReviews",
+      callback = function(event)
+        if event.data and event.data.reviews then
+          require("local_review.presentation.ui").open_reviews_split(event.data.reviews)
+        end
+      end,
+    })
+
     state.configured = true
   end
 
