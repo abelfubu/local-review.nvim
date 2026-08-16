@@ -11,12 +11,16 @@ describe("storage", function()
   local module
   local file_contents
   local readable_files
+  local file_mtimes
   local saved_rename
   local saved_remove
+  local next_mtime
 
   before_each(function()
     file_contents = {}
     readable_files = {}
+    file_mtimes = {}
+    next_mtime = 1
 
     package.loaded["local_review.infrastructure.storage"] = nil
     package.loaded["local_review.domain.comment_store"] = nil
@@ -42,7 +46,12 @@ describe("storage", function()
         writefile = function(lines, path)
           file_contents[path] = lines[1]
           readable_files[path] = true
+          file_mtimes[path] = next_mtime
+          next_mtime = next_mtime + 1
           return 0
+        end,
+        getftime = function(path)
+          return file_mtimes[path] or 0
         end,
       },
       json = {
@@ -111,6 +120,8 @@ describe("storage", function()
     local path = module.scope_file("/repo")
     file_contents[path] = require("dkjson").encode(data)
     readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
 
     local loaded = module.load_scope("/repo")
     assert.are.equal(2, #loaded.comments)
@@ -128,6 +139,8 @@ describe("storage", function()
     local path = module.scope_file("/repo")
     file_contents[path] = require("dkjson").encode(data)
     readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
 
     local loaded = module.load_scope("/repo")
     assert.are.equal(1, #loaded.comments)
@@ -143,6 +156,8 @@ describe("storage", function()
       },
     })
     readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
 
     local ok, err = module.save_scope("/repo", {
       comments = { { id = "local-2", origin = "local", absolute_path = "/repo/b.lua", anchor = { line_number = 3 } } },
@@ -166,8 +181,193 @@ describe("storage", function()
     local path = module.scope_file("/repo")
     file_contents[path] = "{}"
     readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
 
     local loaded = module.load_scope("/repo")
     assert.are.equal(0, #loaded.comments)
+  end)
+
+  it("caches scope data and avoids re-decoding on repeated loads", function()
+    local path = module.scope_file("/repo")
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        { id = "local-1", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } },
+      },
+    })
+    readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    local decode_calls = 0
+    local original_decode = _G.vim.json.decode
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.json.decode = function(value)
+      decode_calls = decode_calls + 1
+      return original_decode(value)
+    end
+
+    local first = module.load_scope("/repo")
+    assert.are.equal(1, decode_calls)
+    assert.are.equal("local-1", first.comments[1].id)
+
+    local second = module.load_scope("/repo")
+    assert.are.equal(1, decode_calls)
+    assert.are.equal("local-1", second.comments[1].id)
+
+    _G.vim.json.decode = original_decode
+  end)
+
+  it("returns copies so caller mutation cannot corrupt the cache", function()
+    local path = module.scope_file("/repo")
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        {
+          id = "local-1",
+          origin = "local",
+          absolute_path = "/repo/a.lua",
+          body = "original",
+          anchor = { line_number = 1 },
+        },
+      },
+    })
+    readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    local first = module.load_scope("/repo")
+    first.comments[1].body = "mutated"
+    first.comments[1].anchor.line_number = 99
+    table.insert(first.comments, { id = "injected" })
+
+    local second = module.load_scope("/repo")
+    assert.are.equal("original", second.comments[1].body)
+    assert.are.equal(1, second.comments[1].anchor.line_number)
+    assert.are.equal(1, #second.comments)
+  end)
+
+  it("writes through the cache on save_scope", function()
+    local path = module.scope_file("/repo")
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        { id = "local-1", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } },
+      },
+    })
+    readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    local first = module.load_scope("/repo")
+    assert.are.equal(1, #first.comments)
+
+    local ok, err = module.save_scope("/repo", {
+      comments = { { id = "local-2", origin = "local", absolute_path = "/repo/b.lua", anchor = { line_number = 2 } } },
+    })
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    local second = module.load_scope("/repo")
+    assert.are.equal(1, #second.comments)
+    assert.are.equal("local-2", second.comments[1].id)
+  end)
+
+  it("invalidates the cache for one scope or all scopes", function()
+    local path_a = module.scope_file("/repo-a")
+    file_contents[path_a] = require("dkjson").encode({
+      comments = { { id = "a", origin = "local", absolute_path = "/repo-a/f.lua", anchor = { line_number = 1 } } },
+    })
+    readable_files[path_a] = true
+    file_mtimes[path_a] = 100
+
+    local path_b = module.scope_file("/repo-b")
+    file_contents[path_b] = require("dkjson").encode({
+      comments = { { id = "b", origin = "local", absolute_path = "/repo-b/f.lua", anchor = { line_number = 1 } } },
+    })
+    readable_files[path_b] = true
+    file_mtimes[path_b] = 200
+
+    module.load_scope("/repo-a")
+    module.load_scope("/repo-b")
+
+    -- Change the backing file for repo-a but keep its mtime unchanged so the
+    -- explicit invalidation function is the only thing that refreshes it.
+    file_contents[path_a] = require("dkjson").encode({
+      comments = { { id = "a2", origin = "local", absolute_path = "/repo-a/f.lua", anchor = { line_number = 1 } } },
+    })
+
+    local stale_a = module.load_scope("/repo-a")
+    assert.are.equal("a", stale_a.comments[1].id)
+
+    module.invalidate_scope_cache("/repo-a")
+    local fresh_a = module.load_scope("/repo-a")
+    assert.are.equal("a2", fresh_a.comments[1].id)
+
+    -- Change repo-b without touching mtime, then invalidate every scope.
+    file_contents[path_b] = require("dkjson").encode({
+      comments = { { id = "b2", origin = "local", absolute_path = "/repo-b/f.lua", anchor = { line_number = 1 } } },
+    })
+
+    local stale_b = module.load_scope("/repo-b")
+    assert.are.equal("b", stale_b.comments[1].id)
+
+    module.invalidate_scope_cache()
+    local fresh_b = module.load_scope("/repo-b")
+    assert.are.equal("b2", fresh_b.comments[1].id)
+  end)
+
+  it("does not serve stale entries when the scope file is deleted externally", function()
+    local path = module.scope_file("/repo")
+    file_contents[path] = require("dkjson").encode({
+      comments = { { id = "local-1", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } } },
+    })
+    readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    local first = module.load_scope("/repo")
+    assert.are.equal(1, #first.comments)
+
+    file_contents[path] = nil
+    readable_files[path] = nil
+
+    local second = module.load_scope("/repo")
+    assert.are.equal(0, #second.comments)
+  end)
+
+  it("save_scope merge still reads disk directly and does not use the cache", function()
+    local path = module.scope_file("/repo")
+    file_contents[path] = require("dkjson").encode({
+      comments = { { id = "local-1", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } } },
+    })
+    readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    module.load_scope("/repo")
+
+    -- Simulate a concurrent external write that the cache cannot see.
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        { id = "local-1", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } },
+        { id = "local-3", origin = "local", absolute_path = "/repo/c.lua", anchor = { line_number = 3 } },
+      },
+    })
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    local ok, err = module.save_scope("/repo", {
+      comments = { { id = "local-2", origin = "local", absolute_path = "/repo/b.lua", anchor = { line_number = 2 } } },
+    })
+    assert.is_true(ok)
+    assert.is_nil(err)
+
+    local saved = require("dkjson").decode(file_contents[path])
+    local ids = {}
+    for _, comment in ipairs(saved.comments) do
+      ids[comment.id] = true
+    end
+    assert.is_true(ids["local-1"])
+    assert.is_true(ids["local-2"])
+    assert.is_true(ids["local-3"])
   end)
 end)

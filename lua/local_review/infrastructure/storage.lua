@@ -2,6 +2,9 @@ local comment_store = require("local_review.domain.comment_store")
 
 local M = {}
 
+---@type table<string, table>
+local cache = {}
+
 local function opts()
   return require("local_review").get_opts()
 end
@@ -12,6 +15,20 @@ end
 
 local function scope_key(scope_root)
   return vim.fn.sha256(scope_root)
+end
+
+---Deep copy a value. Non-table values are returned unchanged.
+---@param value any
+---@return any
+local function deep_copy(value)
+  if type(value) ~= "table" then
+    return value
+  end
+  local copy = {}
+  for k, v in pairs(value) do
+    copy[deep_copy(k)] = deep_copy(v)
+  end
+  return copy
 end
 
 ---@param scope_root string
@@ -95,6 +112,20 @@ local function file_hash(path)
   return vim.fn.sha256(table.concat(lines, "\n"))
 end
 
+---Return the modification time of a file as { sec, nsec }. Falls back to
+---vim.fn.getftime (second resolution) when libuv is unavailable.
+---@param path string
+---@return { sec: integer, nsec: integer }
+local function file_mtime(path)
+  if vim.uv then
+    local stat = vim.uv.fs_stat(path)
+    if stat and stat.mtime then
+      return stat.mtime
+    end
+  end
+  return { sec = vim.fn.getftime(path), nsec = 0 }
+end
+
 local function load_json(path)
   if vim.fn.filereadable(path) == 0 then
     return { comments = {} }
@@ -115,8 +146,39 @@ function M.scope_file(scope_root)
   return string.format("%s/%s.json", base, scope_key(scope_root))
 end
 
+---Invalidate the in-memory scope cache.
+---Called from init.lua autocmds when external events may have changed
+---persisted state, or internally around writes.
+---@param scope_root string?
+function M.invalidate_scope_cache(scope_root)
+  if scope_root then
+    cache[scope_root] = nil
+  else
+    cache = {}
+  end
+end
+
 function M.load_scope(scope_root)
   local path = M.scope_file(scope_root)
+  local cached = cache[scope_root]
+
+  -- A scope file modified or deleted externally must not serve stale entries
+  -- forever. Keep the check cheap: existence plus modification time.
+  if cached then
+    if vim.fn.filereadable(path) == 0 then
+      cache[scope_root] = nil
+    else
+      local current_mtime = file_mtime(path)
+      if current_mtime.sec ~= cached.mtime.sec or current_mtime.nsec ~= cached.mtime.nsec then
+        cache[scope_root] = nil
+      else
+        -- Callers mutate returned scope tables in place, so always hand out a
+        -- deep copy; the canonical cached reference stays untouched.
+        return deep_copy(cached.data)
+      end
+    end
+  end
+
   local data = load_json(path)
 
   -- Legacy migration: remote comments used to be persisted but now live in
@@ -132,7 +194,9 @@ function M.load_scope(scope_root)
   -- Record the disk fingerprint so subsequent writes can detect clobbering.
   last_known[scope_root] = { hash = file_hash(path) }
 
-  return data
+  -- Cache the canonical post-filter/post-migration table.
+  cache[scope_root] = { data = data, mtime = file_mtime(path) }
+  return deep_copy(data)
 end
 
 ---Union two comment lists by comment id, preferring `save_comments` when ids
@@ -235,12 +299,16 @@ function M.save_scope(scope_root, data, opts)
   -- Remember the fingerprint of the file we just produced.
   last_known[scope_root] = { hash = file_hash(path) }
 
+  -- Write-through: keep the cache in sync with the persisted merged state.
+  cache[scope_root] = { data = deep_copy(data), mtime = file_mtime(path) }
+
   return true
 end
 
 function M.delete_scope(scope_root)
   local path = M.scope_file(scope_root)
   last_known[scope_root] = nil
+  cache[scope_root] = nil
 
   if vim.fn.filereadable(path) == 1 then
     return vim.fn.delete(path) == 0
