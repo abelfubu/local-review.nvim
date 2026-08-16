@@ -33,6 +33,7 @@ number, so they follow the code when the file changes. See
       marker_text = "▎",                       -- gutter sign text
       marker_hl = "LocalReviewMarker",         -- gutter sign highlight
       stale_marker_hl = "LocalReviewStaleMarker", -- stale sign highlight
+      gh_marker_hl = "LocalReviewGhMarker",    -- GitHub comment sign highlight
       storage_dir = vim.fn.stdpath("state") .. "/local-review",
       keymaps = {
         comment = "<leader>rc",
@@ -93,6 +94,16 @@ Comments can only be added to real file buffers. Scheme-prefixed buffers
 :LocalReviewClear [path]
                         Delete all comments under [path] (default: current
                         repo).
+
+                                                        *:LocalReviewGhPull*
+:LocalReviewGhPull     Fetch unresolved inline PR review comments from
+                        GitHub for the current branch and display them as
+                        read-only comments. Requires the `gh` CLI and a PR
+                        for the current branch.
+
+                                                       *:LocalReviewGhClear*
+:LocalReviewGhClear     Clear the in-memory pulled PR comments for the current
+                        scope.
 
                                                         *:LocalReviewList*
 :LocalReviewList [path] List comments under [path] in the quickfix list.
@@ -165,6 +176,10 @@ LocalReviewMarker       Gutter sign for comments. Default: DiagnosticInfo.
 LocalReviewStaleMarker  Gutter sign for stale comments.
                         Default: DiagnosticWarn.
 
+                                                  *hl-LocalReviewGhMarker*
+LocalReviewGhMarker     Gutter sign for pulled GitHub review comments.
+                        Default: DiagnosticInfo.
+
                                               *hl-LocalReviewEditorTitle*
 LocalReviewEditorTitle  Title of the editor float. Default: Number.
 
@@ -190,5 +205,11 @@ Comments are stored as JSON in `storage_dir`, one file per repository
 repos). Writes are guarded against concurrent Neovim instances: if the file
 changed on disk since it was loaded, comments are merged by id instead of
 overwritten.
+
+Pulled GitHub comments are session-temporal: they are kept in memory only,
+recorded against the branch checked out when `:LocalReviewGhPull` ran, and
+cleared when Neovim restarts or `:LocalReviewGhClear` is used. On a branch
+switch, pulled comments from another branch are hidden until you run
+`:LocalReviewGhPull` again on that branch.
 
 vim:tw=78:ts=8:ft=help:norl:

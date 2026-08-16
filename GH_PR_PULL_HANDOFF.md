@@ -99,22 +99,22 @@ Normalization decisions:
 
 ## Phase 4 — Sync + `:LocalReviewGhPull [path]`
 
-Sync rules (upsert into storage):
+Sync rules (replace the in-memory session set):
 
-- Remote identity = `(repository, pull_number, thread_id, comment_id)`
-- Add `comment_store.upsert_remote(comments, comment)`: matches by remote identity —
-  NOT by path/line (two threads can share a line, and `upsert_comment` hardcodes
-  `origin = "local"`). Bodies edited on GitHub update in place; `origin == "local"`
-  comments are never touched
-- Threads now resolved/absent → mark `remote.resolved`/`stale`, **never delete** during sync
-- Persist only after a complete successful fetch. `storage.save_scope` is already atomic
-  (temp file + rename) and supports `remove_ids` tombstones — build sync on it
-- Backoff on 403/429; no caching of fetch results
-- Remote comments are persisted in the same scope file as locals (same PR branch = same scope_root)
+- Remote comments are session-temporal: each successful `:LocalReviewGhPull`
+  wholesale-replaces the per-scope, per-branch in-memory session set managed by
+  `application/gh_session.lua`.
+- Failed fetches leave any existing session state untouched.
+- Session comments are branch-visible: `gh_session.comments_for_path` only returns
+  comments whose recorded branch matches the current branch.
+- `gh_pr_comments.fetch` performs validation/normalization and may skip
+  non-line threads; skipped counts are surfaced to the user but do not affect
+  replacement.
 
 Command wiring in `init.lua`: resolve repo root via `context`, PR via existing `gh_pr.lua` helpers
-(extract `get_pr_info` for reuse), call adapter `fetch`, merge into scope, then fire
-`User`/`LocalReviewChanged` (never call `markers` directly — see ARCHITECTURE.md).
+(extract `get_pr_info` for reuse), call adapter `fetch`, then `gh_session.set`. Fire
+`User`/`LocalReviewChanged` after a successful sync (never call `markers` directly
+— see ARCHITECTURE.md).
 
 ## Phase 5 — UI + export
 
@@ -127,8 +127,8 @@ Command wiring in `init.lua`: resolve repo root via `context`, PR via existing `
      https://github.com/owner/repo/pull/123#discussion_r...
   ```
 
-- Multiple threads on one line must stay distinct — investigate `find_comment_at_line` returning
-  only the first match; if it collapses threads, fix lookup before shipping
+- Session remotes are returned by `comments.list_comments_in_path` and guarded
+  against edits/deletes in `comments.lua`.
 - Optional: open-in-browser action for the comment URL (keep it small and read-only)
 
 ## Non-goals (first PR)
