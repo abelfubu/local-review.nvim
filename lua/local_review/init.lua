@@ -191,6 +191,17 @@ function M.setup(opts)
       group = vim.api.nvim_create_augroup("local-review-branch-cache", { clear = true }),
       callback = function()
         require("local_review.infrastructure.context").invalidate_branch_cache()
+        require("local_review.presentation.ui").reconcile_reviews_buffer()
+      end,
+    })
+
+    vim.api.nvim_create_autocmd("User", {
+      group = vim.api.nvim_create_augroup("local-review-reviews", { clear = true }),
+      pattern = "LocalReviewReviews",
+      callback = function(event)
+        if event.data and event.data.reviews then
+          require("local_review.presentation.ui").open_reviews_split(event.data.reviews, event.data.scope_root)
+        end
       end,
     })
 

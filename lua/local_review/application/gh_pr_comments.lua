@@ -4,7 +4,7 @@ local gh = require("local_review.infrastructure.gh")
 local M = {}
 
 M.QUERY = [[
-query($owner: String!, $repo: String!, $pr: Int!, $threadsCursor: String) {
+query($owner: String!, $repo: String!, $pr: Int!, $threadsCursor: String, $reviewsCursor: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $pr) {
       reviewThreads(first: 100, after: $threadsCursor) {
@@ -47,6 +47,22 @@ query($owner: String!, $repo: String!, $pr: Int!, $threadsCursor: String) {
               diffHunk
             }
           }
+        }
+      }
+      reviews(first: 100, after: $reviewsCursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          body
+          state
+          url
+          author {
+            login
+          }
+          submittedAt
         }
       }
     }
@@ -331,50 +347,127 @@ local function fetch_all_comments(scope_root, thread)
   return nodes
 end
 
-local function fetch_threads(scope_root, owner, repo, pr, cursor, threads)
+local function fetch_snapshot(
+  scope_root,
+  owner,
+  repo,
+  pr,
+  threads_cursor,
+  reviews_cursor,
+  threads,
+  reviews,
+  reviews_included,
+  threads_done,
+  reviews_done
+)
   threads = threads or {}
+  reviews = reviews or {}
+  reviews_included = reviews_included or false
+  threads_done = threads_done or false
+  reviews_done = reviews_done or false
 
   local out, err = run_query(scope_root, M.QUERY, {
     owner = owner,
     repo = repo,
     pr = pr,
-    threadsCursor = cursor,
+    threadsCursor = threads_cursor,
+    reviewsCursor = reviews_cursor,
   })
   if not out then
-    return nil, err
+    return nil, nil, false, err
   end
 
   local ok, decoded = pcall(vim.json.decode, out)
   if not ok then
-    return nil, "Failed to parse review threads response"
+    return nil, nil, false, "Failed to parse review snapshot response"
   end
 
-  local review_threads = decoded.data
-    and decoded.data.repository
-    and decoded.data.repository.pullRequest
-    and decoded.data.repository.pullRequest.reviewThreads
+  local pull_request = decoded.data and decoded.data.repository and decoded.data.repository.pullRequest
+  if not pull_request then
+    return nil, nil, false, "Invalid review snapshot response"
+  end
+
+  local review_threads = pull_request.reviewThreads
   if not review_threads then
-    return nil, "Invalid review threads response"
+    return nil, nil, false, "Invalid review snapshot response"
   end
 
-  for _, node in ipairs(review_threads.nodes or {}) do
-    table.insert(threads, node)
-  end
-
-  if review_threads.pageInfo and review_threads.pageInfo.hasNextPage then
-    local next_cursor = review_threads.pageInfo.endCursor
-    if next_cursor == cursor then
-      return nil, "Pagination cursor did not advance for review threads"
+  if not threads_done then
+    for _, node in ipairs(review_threads.nodes or {}) do
+      table.insert(threads, node)
     end
-    return fetch_threads(scope_root, owner, repo, pr, next_cursor, threads)
   end
 
-  return threads
+  local reviews_connection = pull_request.reviews
+  if reviews_connection ~= nil then
+    reviews_included = true
+    if not reviews_done then
+      for _, node in ipairs(reviews_connection.nodes or {}) do
+        table.insert(reviews, node)
+      end
+    end
+  else
+    reviews_done = true
+  end
+
+  local threads_page_info = review_threads.pageInfo or {}
+  local reviews_page_info = reviews_connection and reviews_connection.pageInfo or {}
+
+  local has_threads_next = threads_page_info.hasNextPage
+  local has_reviews_next = reviews_page_info.hasNextPage
+
+  if has_threads_next then
+    local next_threads_cursor = threads_page_info.endCursor
+    if next_threads_cursor == threads_cursor then
+      return nil, nil, false, "Pagination cursor did not advance for review threads"
+    end
+    threads_cursor = next_threads_cursor
+  else
+    threads_done = true
+  end
+
+  if has_reviews_next then
+    local next_reviews_cursor = reviews_page_info.endCursor
+    if next_reviews_cursor == reviews_cursor then
+      return nil, nil, false, "Pagination cursor did not advance for reviews"
+    end
+    reviews_cursor = next_reviews_cursor
+  else
+    reviews_done = true
+  end
+
+  if has_threads_next or has_reviews_next then
+    return fetch_snapshot(
+      scope_root,
+      owner,
+      repo,
+      pr,
+      threads_cursor,
+      reviews_cursor,
+      threads,
+      reviews,
+      reviews_included,
+      threads_done,
+      reviews_done
+    )
+  end
+
+  return threads, reviews, reviews_included
 end
+
+---@class ReviewBody
+---@field id string
+---@field author string?
+---@field state string
+---@field body string
+---@field url string
+---@field submitted_at string?
 
 ---@class FetchedRemoteComments
 ---@field repository string
 ---@field skipped integer?
+---@field reviews ReviewBody[]
+---@field reviews_included boolean
 ---@field [integer] LocalReviewComment
 
 ---@param scope_root string
@@ -393,11 +486,13 @@ function M.fetch(scope_root, pr_info, callback)
     return
   end
 
-  local threads, threads_err = fetch_threads(scope_root, owner, repo, pr_info.number)
+  local threads, reviews, reviews_included, snapshot_err = fetch_snapshot(scope_root, owner, repo, pr_info.number)
   if not threads then
-    callback(nil, threads_err)
+    callback(nil, snapshot_err)
     return
   end
+
+  reviews = reviews or {}
 
   for _, thread in ipairs(threads) do
     if thread.comments and thread.comments.pageInfo and thread.comments.pageInfo.hasNextPage then
@@ -450,8 +545,28 @@ function M.fetch(scope_root, pr_info, callback)
     )
   end
 
+  local review_bodies = {}
+  for _, review in ipairs(reviews) do
+    if review.body and review.body:match("%S") and review.state ~= "PENDING" then
+      table.insert(review_bodies, {
+        id = review.id,
+        author = review.author and review.author.login,
+        state = review.state,
+        body = review.body,
+        url = review.url,
+        submitted_at = review.submittedAt,
+      })
+    end
+  end
+
+  table.sort(review_bodies, function(a, b)
+    return (a.submitted_at or "") > (b.submitted_at or "")
+  end)
+
   result.repository = repo_slug
   result.skipped = skipped
+  result.reviews = review_bodies
+  result.reviews_included = reviews_included
   callback(result, nil)
 end
 

@@ -2,9 +2,11 @@ local M = {}
 
 ---Fetch PR comments from GitHub and replace the in-memory session set for
 ---the scope. Failed fetches leave any existing session state untouched.
+---Review bodies are stored alongside comments in the session and follow the
+---same branch-visibility rules.
 ---@param scope_root string
 ---@param pr_info { number: integer }
----@param callback fun(ok: boolean, err: string?, stats: { count: integer }?)
+---@param callback fun(ok: boolean, err: string?, stats: { count: integer, reviews: ReviewSummary[], reviews_included: boolean? }?)
 function M.sync(scope_root, pr_info, callback)
   local gh_pr_comments = require("local_review.application.gh_pr_comments")
   local gh_session = require("local_review.application.gh_session")
@@ -34,17 +36,25 @@ function M.sync(scope_root, pr_info, callback)
         vim.log.levels.WARN
       )
     end
-    gh_session.set(scope_root, fetched, pr_info.number, branch or "")
 
-    callback(true, nil, { count = #fetched })
+    local comments = {}
+    for _, comment in ipairs(fetched) do
+      table.insert(comments, comment)
+    end
+
+    local reviews = fetched.reviews or {}
+    gh_session.set(scope_root, comments, reviews, pr_info.number, branch or "")
+
+    callback(true, nil, {
+      count = #comments,
+      reviews = reviews,
+      reviews_included = fetched.reviews_included == true,
+    })
   end)
 end
 
----Pull PR comments for the current context and notify the user.
-function M.pull()
+local function resolve_pull_context()
   local context = require("local_review.infrastructure.context")
-  local gh_pr = require("local_review.application.gh_pr")
-
   local ctx, ctx_err = context.comment_context()
   if not ctx then
     -- Pulling only needs a scope_root (storage + gh cwd), not a buffer file.
@@ -52,14 +62,63 @@ function M.pull()
     if ctx_err == "Current buffer has no file path." then
       local scope_root, scope_err = context.scope_root(vim.fn.getcwd())
       if not scope_root then
-        vim.notify(scope_err or "Failed to determine the review scope.", vim.log.levels.WARN)
-        return
+        return nil, scope_err or "Failed to determine the review scope."
       end
       ctx = { scope_root = scope_root }
     else
-      vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
-      return
+      return nil, ctx_err or "Failed to determine the review scope."
     end
+  end
+  return ctx, nil
+end
+
+---@param stats { count: integer, reviews: ReviewSummary[], reviews_included: boolean? }
+---@param scope_root string
+local function notify_pull(stats, scope_root)
+  local review_count = stats.reviews and #stats.reviews or 0
+  local review_part = ""
+  if stats.reviews_included then
+    if review_count > 0 then
+      review_part = string.format(" · %d review summar%s", review_count, review_count == 1 and "y" or "ies")
+    else
+      review_part = " · no review summaries"
+    end
+  end
+
+  if stats.count > 0 then
+    vim.notify(string.format("Pulled %d PR comments%s.", stats.count, review_part), vim.log.levels.INFO)
+  else
+    if stats.reviews_included and review_count > 0 then
+      vim.notify(
+        string.format("No PR comments found · %d review summar%s.", review_count, review_count == 1 and "y" or "ies"),
+        vim.log.levels.INFO
+      )
+    else
+      vim.notify("No PR comments found — cleared previous session.", vim.log.levels.INFO)
+    end
+  end
+
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "LocalReviewChanged",
+    data = { scope_root = scope_root },
+  })
+
+  if stats.reviews_included and review_count > 0 then
+    vim.api.nvim_exec_autocmds("User", {
+      pattern = "LocalReviewReviews",
+      data = { reviews = stats.reviews, scope_root = scope_root },
+    })
+  end
+end
+
+---Pull PR comments for the current context and notify the user.
+function M.pull()
+  local gh_pr = require("local_review.application.gh_pr")
+
+  local ctx, ctx_err = resolve_pull_context()
+  if not ctx then
+    vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+    return
   end
 
   local pr_info, pr_err = gh_pr.get_pr_info(ctx.scope_root)
@@ -74,15 +133,12 @@ function M.pull()
       return
     end
 
-    if stats and stats.count and stats.count > 0 then
-      vim.notify(string.format("Pulled %d PR comments.", stats.count), vim.log.levels.INFO)
-    else
-      vim.notify("No PR comments found — cleared previous session.", vim.log.levels.INFO)
+    if not stats then
+      vim.notify("No PR comment data received.", vim.log.levels.WARN)
+      return
     end
-    vim.api.nvim_exec_autocmds("User", {
-      pattern = "LocalReviewChanged",
-      data = { scope_root = ctx.scope_root },
-    })
+
+    notify_pull(stats, ctx.scope_root)
   end)
 end
 

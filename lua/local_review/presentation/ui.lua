@@ -2,6 +2,7 @@ local M = {}
 
 local comments = require("local_review.application.comments")
 local comment_store = require("local_review.domain.comment_store")
+local gh_session = require("local_review.application.gh_session")
 
 local namespace = vim.api.nvim_create_namespace("local-review-ui")
 local placeholder_namespace = vim.api.nvim_create_namespace("local-review-ui-placeholder")
@@ -663,11 +664,218 @@ function M.open_current_line(range)
   vim.cmd("startinsert!")
 end
 
+local reviews_buf_name = "local-review://gh-reviews"
+
+local function reviews_buffer()
+  local bufnr = vim.fn.bufnr(reviews_buf_name)
+  if bufnr > 0 and vim.api.nvim_buf_is_valid(bufnr) then
+    return bufnr
+  end
+  return nil
+end
+
+local function reviews_buffer_winid(bufnr)
+  for _, winid in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == bufnr then
+      return winid
+    end
+  end
+  return nil
+end
+
+local function reviews_lines(reviews)
+  local lines = {}
+  for i, review in ipairs(reviews) do
+    local author = review.author or "unknown"
+    local state_text = review.state or "UNKNOWN"
+    local date = review.submitted_at and review.submitted_at:sub(1, 10) or "unknown"
+    table.insert(lines, string.format("## @%s · %s · %s", author, state_text, date))
+    table.insert(lines, "")
+    for _, body_line in ipairs(vim.split(review.body or "", "\n", { plain = true })) do
+      table.insert(lines, body_line)
+    end
+    table.insert(lines, "")
+    table.insert(lines, string.format("**URL:** <%s>", review.url or ""))
+
+    if i < #reviews then
+      table.insert(lines, "")
+      table.insert(lines, "---")
+      table.insert(lines, "")
+    end
+  end
+  return lines
+end
+
+local function set_reviews_window_options(winid)
+  vim.wo[winid].wrap = true
+  vim.wo[winid].linebreak = true
+  vim.wo[winid].number = false
+  vim.wo[winid].relativenumber = false
+  vim.wo[winid].signcolumn = "no"
+  vim.wo[winid].statuscolumn = " "
+  vim.wo[winid].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:LocalReviewEditorTitle"
+end
+
+local function set_reviews_buffer_options(bufnr)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "hide"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
+  vim.bo[bufnr].buflisted = true
+end
+
+local function set_reviews_keymaps(bufnr)
+  local function map(modes, lhs, rhs, desc)
+    if lhs == nil or lhs == "" then
+      return
+    end
+    vim.keymap.set(modes, lhs, rhs, { buffer = bufnr, silent = true, nowait = true, desc = desc })
+  end
+
+  local opts = require("local_review").get_opts()
+  for _, keymap in ipairs(opts.comment_close_keys or {}) do
+    map(keymap.modes, keymap.key, function()
+      local winid = reviews_buffer_winid(bufnr)
+      if winid and vim.api.nvim_win_is_valid(winid) then
+        pcall(vim.api.nvim_win_close, winid, true)
+      end
+    end, "Local Review: Close reviews")
+  end
+  map("n", "<Esc>", function()
+    local winid = reviews_buffer_winid(bufnr)
+    if winid and vim.api.nvim_win_is_valid(winid) then
+      pcall(vim.api.nvim_win_close, winid, true)
+    end
+  end, "Local Review: Close reviews")
+end
+
+function M.open_reviews_split(reviews, scope_root)
+  if not reviews or #reviews == 0 then
+    return
+  end
+
+  if not scope_root then
+    local ctx = require("local_review.infrastructure.context").comment_context()
+    scope_root = ctx and ctx.scope_root or nil
+  end
+
+  local lines = reviews_lines(reviews)
+  local bufnr = reviews_buffer()
+  local created = false
+
+  if not bufnr then
+    bufnr = vim.api.nvim_create_buf(false, true)
+    created = true
+    set_reviews_buffer_options(bufnr)
+    vim.api.nvim_buf_set_name(bufnr, reviews_buf_name)
+    set_reviews_keymaps(bufnr)
+  end
+
+  vim.b[bufnr].local_review_scope_root = scope_root
+
+  vim.bo[bufnr].modifiable = true
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+  vim.bo[bufnr].modifiable = false
+
+  local winid = reviews_buffer_winid(bufnr)
+  if not winid then
+    vim.cmd("vsplit")
+    winid = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(winid, bufnr)
+  end
+
+  set_reviews_window_options(winid)
+
+  local ok, render = pcall(require, "render-markdown")
+  if ok and render and render.buf_enable then
+    render.buf_enable(bufnr)
+  end
+
+  if created then
+    local group = vim.api.nvim_create_augroup("local-review-reviews-" .. bufnr, { clear = true })
+    vim.api.nvim_create_autocmd("BufWipeout", {
+      group = group,
+      buffer = bufnr,
+      callback = function()
+        local current_winid = reviews_buffer_winid(bufnr)
+        if current_winid and vim.api.nvim_win_is_valid(current_winid) then
+          pcall(vim.api.nvim_win_close, current_winid, true)
+        end
+      end,
+    })
+  end
+end
+
 function M.active_source_line(bufnr)
   if is_open() and state.source_bufnr == bufnr then
     return state.source_line
   end
   return nil
 end
+
+function M.reconcile_reviews_buffer(scope_root)
+  local bufnr = reviews_buffer()
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  if not scope_root then
+    scope_root = vim.b[bufnr].local_review_scope_root
+  end
+  if not scope_root then
+    return
+  end
+
+  local reviews = gh_session.reviews_for_scope(scope_root)
+  if not reviews or #reviews == 0 then
+    local winid = reviews_buffer_winid(bufnr)
+    if winid and vim.api.nvim_win_is_valid(winid) then
+      pcall(vim.api.nvim_win_close, winid, true)
+    end
+    pcall(function()
+      vim.cmd("silent bwipeout! " .. bufnr)
+    end)
+    return
+  end
+
+  local winid = reviews_buffer_winid(bufnr)
+  if winid and vim.api.nvim_win_is_valid(winid) then
+    local lines = reviews_lines(reviews)
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    vim.bo[bufnr].modifiable = false
+  end
+end
+
+local reviews_wipe_group = vim.api.nvim_create_augroup("local-review-reviews-wipe", { clear = true })
+vim.api.nvim_create_autocmd("User", {
+  group = reviews_wipe_group,
+  pattern = "LocalReviewChanged",
+  callback = function(event)
+    local scope_root = event.data and event.data.scope_root
+    if not scope_root then
+      return
+    end
+
+    local reviews = gh_session.reviews_for_scope(scope_root)
+    if #reviews > 0 then
+      return
+    end
+
+    local bufnr = reviews_buffer()
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+
+    local buf_scope = vim.b[bufnr].local_review_scope_root
+    if buf_scope ~= scope_root then
+      return
+    end
+
+    pcall(function()
+      vim.cmd("silent bwipeout! " .. bufnr)
+    end)
+  end,
+})
 
 return M

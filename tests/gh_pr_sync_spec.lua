@@ -45,9 +45,10 @@ describe("GitHub PR comment sync", function()
 
     package.preload["local_review.application.gh_session"] = function()
       return {
-        set = function(scope_root, comments, pull_number, branch)
+        set = function(scope_root, comments, reviews, pull_number, branch)
           session_state[scope_root] = {
             comments = comments,
+            reviews = reviews or {},
             pull_number = pull_number,
             branch = branch,
           }
@@ -148,9 +149,10 @@ describe("GitHub PR comment sync", function()
     session_state["/repo"] = { comments = { remote_comment() }, pull_number = 42, branch = "feature" }
     package.preload["local_review.application.gh_session"] = function()
       return {
-        set = function(scope_root, comments, pull_number, branch)
+        set = function(scope_root, comments, reviews, pull_number, branch)
           session_state[scope_root] = {
             comments = comments,
+            reviews = reviews or {},
             pull_number = pull_number,
             branch = branch,
           }
@@ -218,6 +220,58 @@ describe("GitHub PR comment sync", function()
     assert.are.equal(1, stats.count)
     assert.are.equal(1, #session_state["/repo"].comments)
   end)
+
+  it("stores review bodies in the session and returns them in stats", function()
+    fetch_result = {
+      remote_comment(),
+      repository = "owner/repo",
+      reviews_included = true,
+      reviews = {
+        {
+          id = "review-1",
+          author = "reviewer",
+          state = "COMMENTED",
+          body = "Review body",
+          url = "https://example.com",
+          submitted_at = "2024-01-01T00:00:00Z",
+        },
+      },
+    }
+
+    local ok, err, stats
+    require("local_review.application.gh_pr_sync").sync("/repo", { number = 42 }, function(r_ok, r_err, r_stats)
+      ok = r_ok
+      err = r_err
+      stats = r_stats
+    end)
+
+    assert.is_true(ok)
+    assert.is_nil(err)
+    assert.are.equal(1, stats.count)
+    assert.is_true(stats.reviews_included)
+    assert.is_not_nil(stats.reviews)
+    assert.are.equal(1, #stats.reviews)
+    assert.are.equal("Review body", stats.reviews[1].body)
+    assert.is_not_nil(session_state["/repo"].reviews)
+    assert.are.equal(1, #session_state["/repo"].reviews)
+  end)
+
+  it("reports reviews_included false when the fetch omits the reviews field", function()
+    fetch_result = { remote_comment(), repository = "owner/repo" }
+
+    local ok, err, stats
+    require("local_review.application.gh_pr_sync").sync("/repo", { number = 42 }, function(r_ok, r_err, r_stats)
+      ok = r_ok
+      err = r_err
+      stats = r_stats
+    end)
+
+    assert.is_true(ok)
+    assert.is_nil(err)
+    assert.is_not_nil(stats)
+    assert.are.equal(0, #stats.reviews)
+    assert.is_false(stats.reviews_included)
+  end)
 end)
 
 describe("GitHub PR comment pull", function()
@@ -228,6 +282,7 @@ describe("GitHub PR comment pull", function()
   local comment_context_error
   local sync_calls
   local clear_calls
+  local reviews_event_calls
 
   before_each(function()
     notifications = {}
@@ -237,6 +292,7 @@ describe("GitHub PR comment pull", function()
     comment_context_error = "Current buffer has no file path."
     sync_calls = {}
     clear_calls = {}
+    reviews_event_calls = {}
 
     package.loaded["local_review.application.gh_pr_sync"] = nil
     package.loaded["local_review.infrastructure.context"] = nil
@@ -253,7 +309,11 @@ describe("GitHub PR comment pull", function()
         end,
       },
       api = {
-        nvim_exec_autocmds = function() end,
+        nvim_exec_autocmds = function(name, opts)
+          if name == "User" and opts and opts.data and opts.data.reviews then
+            reviews_event_calls[#reviews_event_calls + 1] = opts.data
+          end
+        end,
       },
     }
 
@@ -338,6 +398,69 @@ describe("GitHub PR comment pull", function()
     assert.are.equal(1, #sync_calls)
     assert.are.equal("Pulled 3 PR comments.", notifications[#notifications].message)
     assert.are.equal(vim.log.levels.INFO, notifications[#notifications].level)
+  end)
+
+  it("notifies comments and review summaries together", function()
+    local module = require("local_review.application.gh_pr_sync")
+    ---@diagnostic disable-next-line: duplicate-set-field
+    module.sync = function(scope_root, info, callback)
+      sync_calls[#sync_calls + 1] = { scope_root = scope_root, info = info }
+      callback(true, nil, {
+        count = 2,
+        reviews = {
+          {
+            id = "review-1",
+            author = "reviewer",
+            state = "COMMENTED",
+            body = "Review body",
+            url = "https://example.com",
+            submitted_at = "2024-01-01T00:00:00Z",
+          },
+        },
+        reviews_included = true,
+      })
+    end
+
+    module.pull()
+
+    assert.are.equal(1, #sync_calls)
+    assert.are.equal("Pulled 2 PR comments · 1 review summary.", notifications[#notifications].message)
+    assert.are.equal(vim.log.levels.INFO, notifications[#notifications].level)
+    assert.are.equal(1, #reviews_event_calls)
+    assert.are.equal(1, #reviews_event_calls[1].reviews)
+    assert.are.equal("/repo", reviews_event_calls[1].scope_root)
+  end)
+
+  it("notifies no review summaries when reviews field is empty", function()
+    local module = require("local_review.application.gh_pr_sync")
+    ---@diagnostic disable-next-line: duplicate-set-field
+    module.sync = function(scope_root, info, callback)
+      sync_calls[#sync_calls + 1] = { scope_root = scope_root, info = info }
+      callback(true, nil, { count = 1, reviews = {}, reviews_included = true })
+    end
+
+    module.pull()
+
+    assert.are.equal(1, #sync_calls)
+    assert.are.equal("Pulled 1 PR comments · no review summaries.", notifications[#notifications].message)
+    assert.are.equal(vim.log.levels.INFO, notifications[#notifications].level)
+    assert.are.equal(0, #reviews_event_calls)
+  end)
+
+  it("notifies no review summaries when reviews are absent", function()
+    local module = require("local_review.application.gh_pr_sync")
+    ---@diagnostic disable-next-line: duplicate-set-field
+    module.sync = function(scope_root, info, callback)
+      sync_calls[#sync_calls + 1] = { scope_root = scope_root, info = info }
+      callback(true, nil, { count = 1, reviews = {} })
+    end
+
+    module.pull()
+
+    assert.are.equal(1, #sync_calls)
+    assert.are.equal("Pulled 1 PR comments.", notifications[#notifications].message)
+    assert.are.equal(vim.log.levels.INFO, notifications[#notifications].level)
+    assert.are.equal(0, #reviews_event_calls)
   end)
 end)
 

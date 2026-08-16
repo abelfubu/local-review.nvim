@@ -50,7 +50,7 @@ local gh_session = require("local_review.application.gh_session")
 context.current_branch = function()
   return "main"
 end
-gh_session.set(scope_root, { remote_comment }, 1, "main")
+gh_session.set(scope_root, { remote_comment }, {}, 1, "main")
 
 require("local_review.presentation.markers").refresh(source_bufnr)
 

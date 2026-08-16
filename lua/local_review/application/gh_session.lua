@@ -3,8 +3,17 @@ local M = {}
 local context = require("local_review.infrastructure.context")
 local comment_store = require("local_review.domain.comment_store")
 
+---@class ReviewSummary
+---@field id string
+---@field author string?
+---@field state string
+---@field body string
+---@field url string
+---@field submitted_at string?
+
 ---@class GhSessionState
 ---@field comments LocalReviewComment[]
+---@field reviews ReviewSummary[]
 ---@field pull_number integer
 ---@field branch string
 ---@field fetched_at string
@@ -15,11 +24,13 @@ local state = {}
 ---Replace the in-memory session state for a scope.
 ---@param scope_root string
 ---@param comments LocalReviewComment[]
+---@param reviews ReviewSummary[]
 ---@param pull_number integer
 ---@param branch string
-function M.set(scope_root, comments, pull_number, branch)
+function M.set(scope_root, comments, reviews, pull_number, branch)
   state[scope_root] = {
     comments = comments or {},
+    reviews = reviews or {},
     pull_number = pull_number,
     branch = branch or "",
     fetched_at = tostring(os.date("!%Y-%m-%dT%H:%M:%SZ")),
@@ -56,6 +67,24 @@ function M.comments_for_path(scope_root, target_path, kind)
   end
 
   return comment_store.matching_path({ { data = session } }, target_path, kind)
+end
+
+---Return review bodies stored for the scope, but only when the current
+---git branch matches the branch recorded at pull time.
+---@param scope_root string
+---@return ReviewSummary[]
+function M.reviews_for_scope(scope_root)
+  local session = state[scope_root]
+  if not session then
+    return {}
+  end
+
+  local current_branch = context.current_branch(scope_root)
+  if not current_branch or current_branch ~= session.branch then
+    return {}
+  end
+
+  return session.reviews
 end
 
 return M
