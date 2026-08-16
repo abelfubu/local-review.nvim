@@ -14,7 +14,7 @@ Use the included [skill](./skills/local-review/SKILL.md) that tells agents how t
 
 ## Features
 
-- **GitHub PR review comments** — pull unresolved inline review threads with `:LocalReviewGhPull` and view them as read-only comments; `:LocalReviewGhPull` also fetches PR-level review bodies and auto-opens them in a read-only split when present. Both are cleared on `:LocalReviewGhClear` or when Neovim restarts
+- **GitHub PR review comments** — pull unresolved inline review threads with `:LocalReviewGhPull` and view them as read-only comments; `:LocalReviewGhPull` also fetches PR-level review bodies and opens them in a read-only split that persists for the session. Both are cleared on `:LocalReviewGhClear` or when Neovim restarts
 - **Multi-line comments** — visually select lines, comment covers the range; every line gets a gutter sign, the box renders below the last line, export shows `file.lua:3-5`
 - **Context anchors** — comments follow the code when the file changes; both ends of a range are anchored independently
 - **Stale detection** — when the anchored code is gone, the comment is marked stale (orange sign, `[stale]` in the title) instead of pointing at the wrong code
@@ -80,7 +80,7 @@ end, { desc = "Local Review Picker" })
 - `:LocalReviewClear [path]` delete stored review comments for a path. If path is omitted, it uses the current repo root when available, otherwise `cwd`.
 - `:LocalReviewList [path]` list review comments in the quickfix list. If path is omitted, it uses the current repo root when available, otherwise `cwd`.
 
-Pulled GitHub comments and review bodies are session-temporal: they live in memory only, are tied to the branch that was checked out when `:LocalReviewGhPull` ran, and disappear when Neovim restarts or when `:LocalReviewGhClear` is used. Switching branches hides pulled comments and review bodies until you re-run `:LocalReviewGhPull` on the matching branch. To view review bodies again, re-run `:LocalReviewGhPull`.
+Pulled GitHub comments and review bodies are session-temporal: they live in memory only, are tied to the branch that was checked out when `:LocalReviewGhPull` ran, and disappear when Neovim restarts or when `:LocalReviewGhClear` is used. The review bodies split persists for the session, so you can close it and navigate back with normal buffer switching (`:b`, `<C-^>`, pickers). Re-running `:LocalReviewGhPull` refreshes the existing buffer in place. Switching branches hides pulled comments and review bodies until you re-run `:LocalReviewGhPull` on the matching branch.
 
 Comments can only be added to real file buffers; scheme-prefixed buffers (`diffview://`, `fugitive://`, `oil://`, ...) are rejected with a notification. The working-tree side of a diff is a real buffer and works fine.
 

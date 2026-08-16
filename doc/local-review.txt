@@ -99,9 +99,11 @@ Comments can only be added to real file buffers. Scheme-prefixed buffers
 :LocalReviewGhPull     Fetch unresolved inline PR review comments and
                         PR-level review bodies from GitHub for the current
                         branch and display them as read-only comments. When
-                        review bodies are present, the same command
-                        auto-opens a read-only split with them. Requires the
-                        `gh` CLI and a PR for the current branch.
+                        review bodies are present, the same command opens a
+                        read-only split with them; the split persists for the
+                        session and is updated in place on subsequent pulls.
+                        Requires the `gh` CLI and a PR for the current
+                        branch.
 
                                                        *:LocalReviewGhClear*
 :LocalReviewGhClear     Clear the in-memory pulled PR comments and review
@@ -211,8 +213,11 @@ overwritten.
 Pulled GitHub comments and review bodies are session-temporal: they are kept
 in memory only, recorded against the branch checked out when
 `:LocalReviewGhPull` ran, and cleared when Neovim restarts or
-`:LocalReviewGhClear` is used. On a branch switch, pulled comments and review
-bodies from another branch are hidden until you run `:LocalReviewGhPull` again
-on that branch. To view review bodies again, re-run `:LocalReviewGhPull`.
+`:LocalReviewGhClear` is used. The review bodies split persists for the
+session with `bufhidden = "hide"`, so you can close the window and navigate
+back with normal buffer switching (`:b`, `<C-^>`, pickers). Re-running
+`:LocalReviewGhPull` refreshes the existing buffer in place. On a branch
+switch, pulled comments and review bodies from another branch are hidden
+until you run `:LocalReviewGhPull` again on that branch.
 
 vim:tw=78:ts=8:ft=help:norl:

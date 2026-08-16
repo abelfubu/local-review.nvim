@@ -11,8 +11,20 @@ vim.fn.writefile({ "local value = 1" }, source_path)
 vim.cmd.edit(vim.fn.fnameescape(source_path))
 
 local source_winid = vim.api.nvim_get_current_win()
+local context = require("local_review.infrastructure.context")
+local scope_root = assert(context.scope_root(source_path), "failed to resolve scope root")
+local branch = context.current_branch(scope_root) or ""
 
-local reviews = {
+local function find_line(lines, pattern)
+  for _, line in ipairs(lines) do
+    if line:find(pattern) then
+      return true
+    end
+  end
+  return false
+end
+
+local reviews_a = {
   {
     id = "review-1",
     author = "reviewer-one",
@@ -31,7 +43,21 @@ local reviews = {
   },
 }
 
-require("local_review.presentation.ui").open_reviews_split(reviews)
+local reviews_b = {
+  {
+    id = "review-3",
+    author = "reviewer-three",
+    state = "CHANGES_REQUESTED",
+    body = "Updated review body.",
+    url = "https://github.com/owner/repo/pull/1#pullrequestreview-3",
+    submitted_at = "2024-03-25T14:00:00Z",
+  },
+}
+
+-- Seed the session so the clear flow can wipe the reviews buffer.
+require("local_review.application.gh_session").set(scope_root, {}, reviews_a, 1, branch)
+
+require("local_review.presentation.ui").open_reviews_split(reviews_a)
 
 local windows = vim.api.nvim_list_wins()
 assert(#windows == 2, "reviews split did not open a second window")
@@ -42,30 +68,44 @@ assert(review_winid ~= source_winid, "reviews split did not open in a new window
 local review_bufnr = vim.api.nvim_get_current_buf()
 assert(vim.bo[review_bufnr].filetype == "markdown", "reviews buffer is not markdown filetype")
 assert(not vim.bo[review_bufnr].modifiable, "reviews buffer is modifiable")
-assert(vim.bo[review_bufnr].bufhidden == "wipe", "reviews buffer is not bufhidden=wipe")
+assert(vim.bo[review_bufnr].bufhidden == "hide", "reviews buffer is not bufhidden=hide")
+assert(vim.bo[review_bufnr].buflisted, "reviews buffer is not listed")
 assert(vim.api.nvim_buf_get_name(review_bufnr):find("gh%-reviews"), "reviews buffer name does not contain gh-reviews")
 
 local lines = vim.api.nvim_buf_get_lines(review_bufnr, 0, -1, false)
-local found_first = false
-local found_second = false
-for _, line in ipairs(lines) do
-  if line:find("@reviewer%-one") and line:find("COMMENTED") and line:find("2024%-01%-15") then
-    found_first = true
-  end
-  if line:find("@reviewer%-two") and line:find("APPROVED") and line:find("2024%-02%-20") then
-    found_second = true
-  end
-end
-assert(found_first, "first review section not rendered")
-assert(found_second, "second review section not rendered")
+assert(find_line(lines, "@reviewer%-one"), "first review section not rendered")
+assert(find_line(lines, "@reviewer%-two"), "second review section not rendered")
 
--- Close with the mapped 'q' key.
+-- Close with the mapped 'q' key; the buffer should survive.
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("q", true, false, true), "x", false)
 vim.wait(200, function()
   return not vim.api.nvim_win_is_valid(review_winid)
 end)
 assert(not vim.api.nvim_win_is_valid(review_winid), "reviews split did not close on q")
+assert(vim.api.nvim_buf_is_valid(review_bufnr), "reviews buffer was wiped on window close")
 assert(vim.api.nvim_get_current_win() == source_winid, "focus did not return to the source window")
 
+-- Re-pull reuses the same buffer and refreshes its content.
+require("local_review.application.gh_session").set(scope_root, {}, reviews_b, 1, branch)
+require("local_review.presentation.ui").open_reviews_split(reviews_b)
+
+local reused_bufnr = vim.api.nvim_get_current_buf()
+assert(reused_bufnr == review_bufnr, "re-pull did not reuse the existing reviews buffer")
+assert(#vim.api.nvim_list_wins() == 2, "re-pull did not reopen a reviews split")
+
+local updated_lines = vim.api.nvim_buf_get_lines(reused_bufnr, 0, -1, false)
+assert(not find_line(updated_lines, "@reviewer%-one"), "stale first review still present after re-pull")
+assert(not find_line(updated_lines, "@reviewer%-two"), "stale second review still present after re-pull")
+assert(find_line(updated_lines, "@reviewer%-three"), "updated review section not rendered")
+assert(not vim.bo[reused_bufnr].modifiable, "reused reviews buffer became modifiable")
+
+-- :LocalReviewGhClear wipes the reviews buffer.
+vim.api.nvim_set_current_win(source_winid)
+vim.cmd("LocalReviewGhClear")
+vim.wait(200, function()
+  return not vim.api.nvim_buf_is_valid(reused_bufnr)
+end)
+assert(not vim.api.nvim_buf_is_valid(reused_bufnr), "reviews buffer was not wiped on clear")
+
 vim.fn.delete(source_path)
-print("PASS: reviews split opened as markdown, was non-modifiable, rendered sections, and closed on q")
+print("PASS: reviews split persists, reuses on re-pull, survives window close, and wipes on clear")
