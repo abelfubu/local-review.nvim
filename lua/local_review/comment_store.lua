@@ -28,27 +28,6 @@ local M = {}
 ---@field stale boolean
 ---@field updated_at string
 
----@param comment LocalReviewComment
----@param generate_id (fun(): string)?
-function M.ensure_comment_defaults(comment, generate_id)
-  if comment.id == "" and generate_id then
-    comment.id = generate_id()
-  end
-  if comment.stale == nil then
-    comment.stale = false
-  end
-  if comment.line_end == nil then
-    if comment.anchor_end then
-      comment.line_end = comment.anchor_end.line_number
-    else
-      comment.line_end = comment.anchor.line_number
-    end
-  end
-  if comment.line_end < comment.anchor.line_number then
-    comment.line_end = comment.anchor.line_number
-  end
-end
-
 ---Both paths must be absolute and normalized; `context` guarantees this at the
 ---boundary (creation time for comments, query time for the target path).
 ---@param dir string
@@ -145,11 +124,9 @@ end
 ---@param comments LocalReviewComment[]
 ---@param absolute_path string
 ---@param line integer
----@param generate_id (fun(): string)?
 ---@return LocalReviewComment?
-function M.find_comment_at_line(comments, absolute_path, line, generate_id)
+function M.find_comment_at_line(comments, absolute_path, line)
   for _, comment in ipairs(comments) do
-    M.ensure_comment_defaults(comment, generate_id)
     if M.comment_covers_line(comment, absolute_path, line) then
       return comment
     end
@@ -160,11 +137,9 @@ end
 ---@param comments LocalReviewComment[]
 ---@param absolute_path string
 ---@param line integer
----@param generate_id (fun(): string)?
 ---@return LocalReviewComment?, integer?
-function M.find_comment_entry_at_line(comments, absolute_path, line, generate_id)
+function M.find_comment_entry_at_line(comments, absolute_path, line)
   for index, comment in ipairs(comments) do
-    M.ensure_comment_defaults(comment, generate_id)
     if M.comment_covers_line(comment, absolute_path, line) then
       return comment, index
     end
@@ -193,11 +168,8 @@ end
 ---@param lines string[]
 ---@param resolve fun(anchor: LineAnchor, lines: string[]): integer?
 ---@param capture fun(lines: string[], line: integer): LineAnchor
----@param generate_id fun(): string
 ---@return boolean
-function M.reconcile_comment(comment, lines, resolve, capture, generate_id)
-  M.ensure_comment_defaults(comment, generate_id)
-
+function M.reconcile_comment(comment, lines, resolve, capture)
   -- Comments created before dual-anchor support only store a single anchor.
   -- Keep the legacy delta-shift behaviour for them; they will be upgraded to
   -- dual anchors the next time the comment is re-created or edited with a
@@ -342,7 +314,6 @@ function M.upsert_comment(comments, opts)
   local resolved_end = M.clamp_line(math.max(opts.line, opts.line_end or opts.line), opts.lines)
 
   if existing then
-    M.ensure_comment_defaults(existing, opts.generate_id)
     existing.body = opts.body
     existing.updated_at = opts.timestamp
     existing.absolute_path = opts.absolute_path

@@ -22,10 +22,6 @@ local function generate_id()
   return tostring(hrtime())
 end
 
-local function ensure_defaults(comment)
-  comment_store.ensure_comment_defaults(comment, generate_id)
-end
-
 ---@param bufnr integer
 ---@return string[]
 local function buffer_lines(bufnr)
@@ -80,7 +76,7 @@ local function reconcile_buffer_state(bufnr, scope_state, ctx)
   local changed = false
   for _, comment in ipairs(comments) do
     if comment.absolute_path == ctx.absolute_path then
-      if comment_store.reconcile_comment(comment, lines, positioning.resolve, positioning.capture, generate_id) then
+      if comment_store.reconcile_comment(comment, lines, positioning.resolve, positioning.capture) then
         changed = true
       end
     end
@@ -171,9 +167,6 @@ end
 
 local function comments_in_scope(scope_root)
   local data = storage.load_scope(scope_root)
-  for _, comment in ipairs(data.comments) do
-    ensure_defaults(comment)
-  end
   table.sort(data.comments, comment_store.comment_sorter)
   return data.comments
 end

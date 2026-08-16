@@ -201,7 +201,7 @@ describe("comment_store.reconcile_comment", function()
       return anchor.line_number
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_false(changed)
     assert.are.equal(5, comment.anchor.line_number)
@@ -216,7 +216,7 @@ describe("comment_store.reconcile_comment", function()
       return anchor.line_number + 3
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_true(changed)
     assert.are.equal(6, comment.anchor.line_number)
@@ -230,7 +230,7 @@ describe("comment_store.reconcile_comment", function()
       return anchor.line_number - 2
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_true(changed)
     assert.are.equal(6, comment.anchor.line_number)
@@ -244,7 +244,7 @@ describe("comment_store.reconcile_comment", function()
       return anchor.line_number + 2
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_true(changed)
     assert.are.equal(7, comment.anchor.line_number)
@@ -258,7 +258,7 @@ describe("comment_store.reconcile_comment", function()
       return nil
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_true(changed)
     assert.is_true(comment.stale)
@@ -273,7 +273,7 @@ describe("comment_store.reconcile_comment", function()
       return nil
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_false(changed)
     assert.is_true(comment.stale)
@@ -321,50 +321,6 @@ describe("comment_store sorting", function()
   end)
 end)
 
-describe("comment_store.ensure_comment_defaults", function()
-  it("assigns an id, stale=false, and clamps line_end to anchor when missing", function()
-    local comment = {
-      id = "",
-      absolute_path = "/f.lua",
-      body = "b",
-      created_at = "t1",
-      updated_at = "t1",
-      source_kind = "test",
-      source_meta = {},
-      anchor = { line_number = 5 },
-    }
-
-    comment_store.ensure_comment_defaults(comment, id_generator())
-
-    assert.are.equal("1", comment.id)
-    assert.is_false(comment.stale)
-    assert.are.equal(5, comment.line_end)
-  end)
-
-  it("does not overwrite an existing id", function()
-    local comment = {
-      id = "existing",
-      anchor = { line_number = 2 },
-    }
-
-    comment_store.ensure_comment_defaults(comment, id_generator())
-
-    assert.are.equal("existing", comment.id)
-  end)
-
-  it("derives line_end from anchor_end when line_end is missing", function()
-    local comment = {
-      id = "",
-      anchor = { line_number = 2 },
-      anchor_end = { line_number = 8 },
-    }
-
-    comment_store.ensure_comment_defaults(comment, id_generator())
-
-    assert.are.equal(8, comment.line_end)
-  end)
-end)
-
 describe("comment_store dual-anchor reconcile", function()
   local function make_dual_anchor_comment(start_line, end_line)
     return {
@@ -395,8 +351,7 @@ describe("comment_store dual-anchor reconcile", function()
     local comment = make_dual_anchor_comment(3, 7)
     local lines = lines_fixture()
 
-    local changed =
-      comment_store.reconcile_comment(comment, lines, resolve_with_offsets(0, 2), simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve_with_offsets(0, 2), simple_capture)
 
     assert.is_true(changed)
     assert.is_false(comment.stale)
@@ -415,7 +370,7 @@ describe("comment_store dual-anchor reconcile", function()
       return nil
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_true(changed)
     assert.is_true(comment.stale)
@@ -428,8 +383,7 @@ describe("comment_store dual-anchor reconcile", function()
     local comment = make_dual_anchor_comment(3, 7)
     local lines = lines_fixture()
 
-    local changed =
-      comment_store.reconcile_comment(comment, lines, resolve_with_offsets(2, 2), simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve_with_offsets(2, 2), simple_capture)
 
     assert.is_true(changed)
     assert.is_false(comment.stale)
@@ -445,7 +399,7 @@ describe("comment_store dual-anchor reconcile", function()
       return anchor.line_number
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_false(changed)
     assert.is_false(comment.stale)
@@ -464,7 +418,7 @@ describe("comment_store dual-anchor reconcile", function()
       return 2
     end
 
-    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture, id_generator())
+    local changed = comment_store.reconcile_comment(comment, lines, resolve, simple_capture)
 
     assert.is_true(changed)
     assert.is_false(comment.stale)
