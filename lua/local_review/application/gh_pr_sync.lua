@@ -58,8 +58,19 @@ function M.pull()
 
   local ctx, ctx_err = context.comment_context()
   if not ctx then
-    vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
-    return
+    -- Pulling only needs a scope_root (storage + gh cwd), not a buffer file.
+    -- Fall back to the current working directory when the buffer is unnamed.
+    if ctx_err == "Current buffer has no file path." then
+      local scope_root, scope_err = context.scope_root(vim.fn.getcwd())
+      if not scope_root then
+        vim.notify(scope_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+        return
+      end
+      ctx = { scope_root = scope_root }
+    else
+      vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+      return
+    end
   end
 
   local pr_info, pr_err = gh_pr.get_pr_info(ctx.scope_root)
