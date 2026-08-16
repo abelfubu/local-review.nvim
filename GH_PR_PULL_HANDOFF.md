@@ -12,27 +12,35 @@ GitHub reviewer → LocalReviewGhPull → inline code comments → LocalReviewEx
 
 ## Current status (read this first)
 
-**Done — foundation is in place on `main`:**
+**Foundation merged in PR #5 — branch from fresh `main`.**
 
 1. **Domain model** — `LocalReviewComment` has `origin ("local"|"github")` and `remote (ReviewMetadata?)`
-   fields in `comment_store.lua`. `ReviewMetadata`: repository, pull_number, thread_id, comment_id,
+   fields in `domain/comment_store.lua`. `ReviewMetadata`: repository, pull_number, thread_id, comment_id,
    review_id?, author, url, commit_id?, resolved, outdated. (Generic name on purpose — provider-agnostic.)
-2. **Guards** — `comment_store.is_remote` / `is_editable` / `submittable` exist and are wired:
+2. **Guards** — `comment_store.is_remote` / `is_editable` exist and are wired:
    - `upsert_comment` refuses to update a remote comment → `nil, nil, "Remote comments are read-only"`
    - `remove_comment` refuses remote comments
-   - `gh_pr.lua` submits only `submittable()` comments; post-submit cleanup uses ids of submitted ones
-   - `export.lua` exports only `get_exportable_comments()` (local only, for now — see Phase 5)
+   - `gh_pr.lua` submits only its own `get_submittable_comments()` filter (policy lives in gh_pr,
+     NOT in comment_store — mirrors `export.get_exportable_comments`)
+   - `export.lua` exports only local comments (for now — see Phase 5)
    - `storage.remove_comments_for_path` / `remove_comments_by_ids` always keep remote comments
-3. **Layer refactor** — see `ARCHITECTURE.md`. Key facts: `storage` is the comment repository
-   (`comments_for_path`, `remove_*`), matching rules are pure functions in `comment_store`
-   (`matching_path`, `partition_path`, `partition_ids`), `comments.lua` is buffer workflows only.
-   Requires must point downward per the layer map.
-4. **No backfill** — single user, storage wiped fresh. Old-shape comments do not exist.
+3. **Layered folders** — `domain/ application/ infrastructure/ presentation/` under `lua/local_review/`.
+   See `ARCHITECTURE.md`. `./scripts/layers.sh` mechanically checks all forbidden edges; part of the gate.
+4. **Storage** — `save_scope` is atomic (temp + rename) and supports `remove_ids` tombstones so LWW
+   merges cannot resurrect removed comments. Single-scope queries: `comments_for_path(scope_root, ...)`.
+5. **UI refresh is event-driven** — application fires `User`/`LocalReviewChanged`
+   (`data = { scope_root = ... }`) after mutations; `init.lua` subscribes → `markers.refresh_scope`.
+   Never import presentation from application.
+6. **No backfill** — single user, storage wiped fresh. Old-shape comments do not exist.
    If that changes, reintroduce defaults-on-load in `storage.load_scope`.
 
-**Test/gate setup:** `./scripts/test.sh` (busted), `./scripts/typecheck.sh` (lua-language-server),
-`stylua --check lua/ tests/`. All must pass before every commit. Mock only system boundaries
-(`vim.system`, `package.preload` of infra modules — see `tests/gh_pr_spec.lua` for the pattern).
+Also in PR #5: `LocalReviewGh` can submit a review with zero comments (plain approve /
+body-only review).
+
+**Test/gate setup:** `./scripts/test.sh` (busted), `./scripts/typecheck.sh`,
+`stylua --check lua/ tests/`, `./scripts/layers.sh`, smoke tests via `nvim --headless -l tests/*_smoke.lua`.
+All must pass before every commit. Mock only system boundaries (`vim.system`,
+`package.preload` of infra modules — see `tests/gh_pr_spec.lua` for the pattern).
 
 ## Next: Phase 3 — GraphQL adapter
 
