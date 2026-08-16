@@ -18,7 +18,7 @@ vim.fn.mkdir(storage_dir, "p")
 require("local_review").setup({ storage_dir = storage_dir })
 
 local scope_root = "/tmp/local_review_lww_repo"
-local storage = require("local_review.storage")
+local storage = require("local_review.infrastructure.storage")
 
 -- Instance A: load and add comment-a.
 local data_a = storage.load_scope(scope_root)
@@ -35,7 +35,7 @@ vim.opt.runtimepath:append("%s")
 require("local_review").setup({ storage_dir = "%s" })
 
 local scope_root = "%s"
-local storage = require("local_review.storage")
+local storage = require("local_review.infrastructure.storage")
 local data = storage.load_scope(scope_root)
 table.insert(data.comments, {
   id = "comment-b",

@@ -1,7 +1,8 @@
 local M = {}
 
-local context = require("local_review.context")
-local comments = require("local_review.comments")
+local context = require("local_review.infrastructure.context")
+local storage = require("local_review.infrastructure.storage")
+local store = require("local_review.domain.comment_store")
 local export_indent_width = 3
 local export_indent = string.rep(" ", export_indent_width)
 
@@ -13,24 +14,57 @@ local function display_path(root_path, kind, absolute_path)
   return context.relative_path(root_path, absolute_path) or absolute_path
 end
 
-local function export_lines(path)
-  local path_comments, root_path, path_kind = comments.list_comments_in_path(path)
-  if not path_comments then
-    return nil, root_path or "Failed to resolve export path."
+local function get_exportable_comments(path_comments)
+  local result = {}
+
+  for _, comment in ipairs(path_comments) do
+    if store.is_editable(comment) then
+      table.insert(result, comment)
+    end
   end
 
-  if #path_comments == 0 then
+  return result
+end
+
+---@param path string?
+---@return { scope_root: string, path: string, kind: "file"|"directory" }? target, string? err
+local function resolve_target(path)
+  local target = path
+  if target == nil or target == "" then
+    target = context.default_export_root()
+  end
+
+  local kind, normalized_or_err = context.path_kind(target)
+  if not kind then
+    return nil, normalized_or_err
+  end
+
+  local scope_root, scope_err = context.scope_root(normalized_or_err)
+  if not scope_root then
+    return nil, scope_err
+  end
+
+  return { scope_root = scope_root, path = normalized_or_err, kind = kind }
+end
+
+local function export_lines(path)
+  local target, resolve_err = resolve_target(path)
+  if not target then
+    return nil, resolve_err or "Failed to resolve export path."
+  end
+
+  local exportable_comments =
+    get_exportable_comments(storage.comments_for_path(target.scope_root, target.path, target.kind))
+
+  if #exportable_comments == 0 then
     return {
       "No review comments found for the selected path.",
     }, nil, 0
   end
 
-  local lines = {
-    "Please address the following feedback",
-    "",
-  }
+  local lines = {}
 
-  for index, comment in ipairs(path_comments) do
+  for index, comment in ipairs(exportable_comments) do
     local stale_suffix = comment.stale and " [stale]" or ""
     local line_ref = tostring(comment.anchor.line_number)
     if (comment.line_end or comment.anchor.line_number) > comment.anchor.line_number then
@@ -39,7 +73,7 @@ local function export_lines(path)
     lines[#lines + 1] = string.format(
       "%d. %s:%s%s",
       index,
-      display_path(root_path, path_kind, comment.absolute_path),
+      display_path(target.path, target.kind, comment.absolute_path),
       line_ref,
       stale_suffix
     )
@@ -47,7 +81,7 @@ local function export_lines(path)
     lines[#lines + 1] = ""
   end
 
-  return lines, nil, #path_comments
+  return lines, nil, #exportable_comments
 end
 
 function M.path_export_text(path)
@@ -95,7 +129,20 @@ function M.open_export(path, opts)
   end
 
   if opts and opts.clear_after_export and comment_count > 0 and copied then
-    comments.clear_path(export_path, { silent = true })
+    local target, resolve_err = resolve_target(export_path)
+    if not target then
+      vim.notify(resolve_err or "Failed to resolve export path.", vim.log.levels.WARN)
+      return
+    end
+    local removed, clear_err = storage.remove_comments_for_path(target.scope_root, target.path, target.kind)
+    if not removed then
+      vim.notify(clear_err or "Failed to clear exported comments.", vim.log.levels.ERROR)
+    elseif #removed > 0 then
+      vim.api.nvim_exec_autocmds("User", {
+        pattern = "LocalReviewChanged",
+        data = { scope_root = target.scope_root },
+      })
+    end
   end
 end
 
