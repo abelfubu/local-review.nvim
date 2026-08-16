@@ -134,7 +134,7 @@ local function find_comment_index_by_id(comments, id)
   return nil
 end
 
-local function select_comment_at_line(comments, absolute_path, bufnr, line)
+local function select_comment_at_line(comments, absolute_path, bufnr, line, advance)
   local matches = comment_store.comments_at_line(comments, absolute_path, line)
   if #matches == 0 then
     return nil, nil
@@ -143,7 +143,10 @@ local function select_comment_at_line(comments, absolute_path, bufnr, line)
   local selection = state.line_selection[bufnr]
   local index = 1
   if selection and selection.path == absolute_path and selection.line == line then
-    index = (selection.index % #matches) + 1
+    index = selection.index
+    if advance then
+      index = (index % #matches) + 1
+    end
   end
   state.line_selection[bufnr] = { path = absolute_path, line = line, index = index }
 
@@ -160,7 +163,8 @@ local function find_current_comment()
   end
 
   local line = current_line()
-  local comment, index = select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, 0, line)
+  local comment, index =
+    select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, resolved.ctx.bufnr, line)
   return {
     ---@type LocalReviewComment?
     comment = comment,
@@ -177,7 +181,7 @@ local function find_line_comment(bufnr, line)
   end
 
   local comment, index =
-    select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, bufnr, line)
+    select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, bufnr, line, false)
   return {
     ---@type LocalReviewComment?
     comment = comment,
@@ -380,11 +384,14 @@ function M.jump(direction)
 
   local line = current_line()
   local cursor_index = nil
+  local absolute_path = comments[1] and comments[1].absolute_path
 
-  if state.jump_cursor and state.jump_cursor.comment_id then
+  if state.jump_cursor and state.jump_cursor.comment_id and absolute_path then
     for index, comment in ipairs(comments) do
       if comment.id == state.jump_cursor.comment_id then
-        cursor_index = index
+        if comment_store.comment_covers_line(comment, absolute_path, line) then
+          cursor_index = index
+        end
         break
       end
     end

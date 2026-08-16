@@ -65,10 +65,12 @@ local function pad(text, width)
 end
 
 local function border_top(title, width)
-  if #title + 4 > width then
+  local title_width = vim.fn.strdisplaywidth(title)
+  if title_width + 4 > width then
     title = ""
+    title_width = 0
   end
-  local fill = width - 2 - #title
+  local fill = width - 2 - title_width
   return "┌" .. title .. string.rep("─", fill) .. "┐"
 end
 

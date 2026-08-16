@@ -23,6 +23,7 @@ local state = {
   viewer_bufnr = nil,
   viewer_winid = nil,
   viewer_source_winid = nil,
+  viewer_group = nil,
 }
 
 local function is_valid_buffer(bufnr)
@@ -119,9 +120,13 @@ local function close_viewer()
   if is_valid_window(source_winid) then
     pcall(vim.api.nvim_set_current_win, source_winid)
   end
+  if state.viewer_group then
+    pcall(vim.api.nvim_del_augroup_by_id, state.viewer_group)
+  end
   state.viewer_bufnr = nil
   state.viewer_winid = nil
   state.viewer_source_winid = nil
+  state.viewer_group = nil
 end
 
 local function close_window()
@@ -300,8 +305,10 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
 
   local size = inline_dimensions({ " " }, source_winid, nil)
   local max_height = math.floor(vim.o.lines * 0.6)
-  local height = math.max(6, math.min(#viewer_lines, max_height))
-  local anchor_row = vim.fn.winline()
+  local height = math.min(math.max(6, #viewer_lines), max_height)
+  local anchor_row = vim.api.nvim_win_call(source_winid, function()
+    return vim.fn.winline()
+  end)
 
   local winid = vim.api.nvim_open_win(bufnr, true, {
     relative = "win",
@@ -329,12 +336,10 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
   vim.wo[winid].statuscolumn = " "
   vim.wo[winid].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:LocalReviewEditorTitle"
 
-  pcall(function()
-    local ok, render = pcall(require, "render-markdown")
-    if ok and render and render.attach then
-      render.attach(bufnr)
-    end
-  end)
+  local ok, render = pcall(require, "render-markdown")
+  if ok and render and render.buf_enable then
+    render.buf_enable(bufnr)
+  end
 
   local function map(modes, lhs, rhs, desc)
     if lhs == nil or lhs == "" then
@@ -354,6 +359,7 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
   end, "Local Review: Close viewer")
 
   local group = vim.api.nvim_create_augroup("local-review-viewer-" .. bufnr, { clear = true })
+  state.viewer_group = group
   vim.api.nvim_create_autocmd("WinClosed", {
     group = group,
     buffer = bufnr,
@@ -364,6 +370,10 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
       state.viewer_bufnr = nil
       state.viewer_winid = nil
       state.viewer_source_winid = nil
+      if state.viewer_group then
+        pcall(vim.api.nvim_del_augroup_by_id, state.viewer_group)
+        state.viewer_group = nil
+      end
     end,
   })
 
@@ -530,7 +540,7 @@ function M.open_current_line(range)
   end
 
   if line_state.comment and comment_store.is_remote(line_state.comment) then
-    M.open_remote_viewer(source_bufnr, source_winid, end_line)
+    M.open_remote_viewer(source_bufnr, source_winid, start_line)
     return
   end
 

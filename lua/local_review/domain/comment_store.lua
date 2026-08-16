@@ -145,12 +145,8 @@ end
 ---@param line integer
 ---@return LocalReviewComment?
 function M.find_comment_at_line(comments, absolute_path, line)
-  for _, comment in ipairs(comments) do
-    if M.comment_covers_line(comment, absolute_path, line) then
-      return comment
-    end
-  end
-  return nil
+  local matches = M.comments_at_line(comments, absolute_path, line)
+  return matches[1]
 end
 
 ---@param comment LocalReviewComment

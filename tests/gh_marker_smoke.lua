@@ -55,9 +55,13 @@ local extmarks =
 assert(#extmarks > 0, "no marker extmarks were created for the remote comment")
 
 local found_outdated = false
+local found_remote_sign_hl = false
 for _, mark in ipairs(extmarks) do
   local details = mark[4] or {}
   local virt_lines = details.virt_lines or {}
+  if details.sign_hl_group == "LocalReviewGhMarker" then
+    found_remote_sign_hl = true
+  end
   for _, virt_line in ipairs(virt_lines) do
     for _, chunk in ipairs(virt_line) do
       local text = chunk[1]
@@ -68,6 +72,7 @@ for _, mark in ipairs(extmarks) do
   end
 end
 assert(found_outdated, "remote comment marker did not render the [outdated] suffix")
+assert(found_remote_sign_hl, "remote comment marker does not use LocalReviewGhMarker sign highlight group")
 
 vim.fn.delete(storage_dir, "rf")
 vim.fn.delete(source_path)

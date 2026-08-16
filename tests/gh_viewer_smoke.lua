@@ -78,6 +78,7 @@ vim.wait(200, function()
   return not vim.api.nvim_win_is_valid(viewer_winid)
 end)
 assert(not vim.api.nvim_win_is_valid(viewer_winid), "viewer did not close on q")
+assert(vim.api.nvim_get_current_win() == source_winid, "focus did not return to the source window")
 
 vim.fn.delete(storage_dir, "rf")
 vim.fn.delete(source_path)

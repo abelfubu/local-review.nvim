@@ -10,6 +10,7 @@ package.path = table.concat({
 describe("export", function()
   local path_comments
   local removed_comments
+  local remove_args
   local saved_scopes
   local stdout_lines
   local notifications
@@ -17,6 +18,7 @@ describe("export", function()
   before_each(function()
     path_comments = {}
     removed_comments = {}
+    remove_args = nil
     saved_scopes = {}
     stdout_lines = {}
     notifications = {}
@@ -44,19 +46,10 @@ describe("export", function()
         comments_for_path = function(_, _, _)
           return path_comments
         end,
-        remove_comments_for_path = function(_, _, _)
-          local removed = {}
-          local kept = {}
-          for _, comment in ipairs(path_comments) do
-            if comment.origin == "local" then
-              table.insert(removed, comment)
-            else
-              table.insert(kept, comment)
-            end
-          end
-          removed_comments = removed
-          path_comments = kept
-          return removed, nil
+        remove_comments_for_path = function(scope_root, path, kind)
+          remove_args = { scope_root = scope_root, path = path, kind = kind }
+          removed_comments = { path_comments[1] }
+          return removed_comments, nil
         end,
       }
     end
@@ -233,9 +226,12 @@ describe("export", function()
     local export = require("local_review.application.export")
     export.open_export("/repo", { clear_after_export = true })
 
+    assert.is_not_nil(remove_args)
+    assert.are.equal("/repo", remove_args.scope_root)
+    assert.are.equal("/repo", remove_args.path)
+    assert.are.equal("directory", remove_args.kind)
     assert.are.equal(1, #removed_comments)
     assert.are.equal("local-1", removed_comments[1].id)
-    assert.are.equal(1, #path_comments)
-    assert.are.equal("github", path_comments[1].origin)
+    assert.are.equal("local", removed_comments[1].origin)
   end)
 end)
