@@ -749,9 +749,14 @@ local function set_reviews_keymaps(bufnr)
   end, "Local Review: Close reviews")
 end
 
-function M.open_reviews_split(reviews)
+function M.open_reviews_split(reviews, scope_root)
   if not reviews or #reviews == 0 then
     return
+  end
+
+  if not scope_root then
+    local ctx = require("local_review.infrastructure.context").comment_context()
+    scope_root = ctx and ctx.scope_root or nil
   end
 
   local lines = reviews_lines(reviews)
@@ -765,6 +770,8 @@ function M.open_reviews_split(reviews)
     vim.api.nvim_buf_set_name(bufnr, reviews_buf_name)
     set_reviews_keymaps(bufnr)
   end
+
+  vim.b[bufnr].local_review_scope_root = scope_root
 
   vim.bo[bufnr].modifiable = true
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
@@ -822,11 +829,18 @@ vim.api.nvim_create_autocmd("User", {
     end
 
     local bufnr = reviews_buffer()
-    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
-      pcall(function()
-        vim.cmd("silent bwipeout! " .. bufnr)
-      end)
+    if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+      return
     end
+
+    local buf_scope = vim.b[bufnr].local_review_scope_root
+    if buf_scope ~= scope_root then
+      return
+    end
+
+    pcall(function()
+      vim.cmd("silent bwipeout! " .. bufnr)
+    end)
   end,
 })
 

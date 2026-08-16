@@ -106,7 +106,7 @@ local function notify_pull(stats, scope_root)
   if stats.reviews_included and review_count > 0 then
     vim.api.nvim_exec_autocmds("User", {
       pattern = "LocalReviewReviews",
-      data = { reviews = stats.reviews },
+      data = { reviews = stats.reviews, scope_root = scope_root },
     })
   end
 end

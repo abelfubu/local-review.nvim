@@ -428,6 +428,7 @@ describe("GitHub PR comment pull", function()
     assert.are.equal(vim.log.levels.INFO, notifications[#notifications].level)
     assert.are.equal(1, #reviews_event_calls)
     assert.are.equal(1, #reviews_event_calls[1].reviews)
+    assert.are.equal("/repo", reviews_event_calls[1].scope_root)
   end)
 
   it("notifies no review summaries when reviews field is empty", function()

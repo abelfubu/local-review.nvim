@@ -199,7 +199,7 @@ function M.setup(opts)
       pattern = "LocalReviewReviews",
       callback = function(event)
         if event.data and event.data.reviews then
-          require("local_review.presentation.ui").open_reviews_split(event.data.reviews)
+          require("local_review.presentation.ui").open_reviews_split(event.data.reviews, event.data.scope_root)
         end
       end,
     })

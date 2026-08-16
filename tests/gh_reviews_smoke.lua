@@ -12,7 +12,7 @@ vim.cmd.edit(vim.fn.fnameescape(source_path))
 
 local source_winid = vim.api.nvim_get_current_win()
 local context = require("local_review.infrastructure.context")
-local scope_root = assert(context.scope_root(source_path), "failed to resolve scope root")
+local scope_root = assert(context.comment_context(0).scope_root, "failed to resolve scope root")
 local branch = context.current_branch(scope_root) or ""
 
 local function find_line(lines, pattern)
@@ -57,7 +57,7 @@ local reviews_b = {
 -- Seed the session so the clear flow can wipe the reviews buffer.
 require("local_review.application.gh_session").set(scope_root, {}, reviews_a, 1, branch)
 
-require("local_review.presentation.ui").open_reviews_split(reviews_a)
+require("local_review.presentation.ui").open_reviews_split(reviews_a, scope_root)
 
 local windows = vim.api.nvim_list_wins()
 assert(#windows == 2, "reviews split did not open a second window")
@@ -87,7 +87,7 @@ assert(vim.api.nvim_get_current_win() == source_winid, "focus did not return to 
 
 -- Re-pull reuses the same buffer and refreshes its content.
 require("local_review.application.gh_session").set(scope_root, {}, reviews_b, 1, branch)
-require("local_review.presentation.ui").open_reviews_split(reviews_b)
+require("local_review.presentation.ui").open_reviews_split(reviews_b, scope_root)
 
 local reused_bufnr = vim.api.nvim_get_current_buf()
 assert(reused_bufnr == review_bufnr, "re-pull did not reuse the existing reviews buffer")
