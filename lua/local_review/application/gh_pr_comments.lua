@@ -1,4 +1,5 @@
 local positioning = require("local_review.domain.positioning")
+local gh = require("local_review.infrastructure.gh")
 
 local M = {}
 
@@ -100,20 +101,10 @@ local function is_transient_error(stderr)
   return stderr:match("HTTP 403") or stderr:match("HTTP 429") or stderr:lower():match("rate limit")
 end
 
-local function run(command, cwd)
-  local result = vim.system(command, { cwd = cwd, text = true }):wait()
-
-  if result.code ~= 0 then
-    return nil, vim.trim(result.stderr or result.stdout or "")
-  end
-
-  return vim.trim(result.stdout or "")
-end
-
 local function run_with_retry(command, cwd)
   local attempts = 0
   while true do
-    local out, err = run(command, cwd)
+    local out, err = gh.run(command, cwd)
     if out then
       return out
     end
@@ -125,10 +116,6 @@ local function run_with_retry(command, cwd)
     attempts = attempts + 1
     M._sleep(RETRY_DELAY * (2 ^ (attempts - 1)))
   end
-end
-
-local function get_repo_slug(repo_root)
-  return run({ "gh", "repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name' }, repo_root)
 end
 
 local function run_query(scope_root, query, variables)
@@ -224,18 +211,18 @@ end
 
 ---@param thread table raw reviewThread node
 ---@param ctx { repository: string, pull_number: integer, scope_root: string }
----@return LocalReviewComment[]
+---@return LocalReviewComment[] comments, string? skip_reason
 function M.normalize(thread, ctx)
   local result = {}
 
   if thread.subjectType ~= "LINE" then
-    return result
+    return result, "non-LINE subjectType"
   end
 
   local end_side = thread.diffSide
   local end_line = resolve_line(end_side, thread.line, thread.originalLine)
   if not end_line then
-    return result
+    return result, "unresolvable line"
   end
 
   local start_side = thread.startDiffSide or end_side
@@ -267,6 +254,7 @@ function M.normalize(thread, ctx)
       line_end = nil,
       source_kind = "github",
       source_meta = {},
+      -- Required shape field, not a staleness decision (stale is derived by local anchoring only).
       stale = false,
       remote = {
         repository = ctx.repository,
@@ -290,7 +278,7 @@ function M.normalize(thread, ctx)
     table.insert(result, comment_result)
   end
 
-  return result
+  return result, nil
 end
 
 local function fetch_comments_page(scope_root, thread_id, cursor)
@@ -376,13 +364,14 @@ end
 
 ---@class FetchedRemoteComments
 ---@field repository string
+---@field skipped integer?
 ---@field [integer] LocalReviewComment
 
 ---@param scope_root string
 ---@param pr_info { number: integer }
 ---@param callback fun(fetched: FetchedRemoteComments?, err: string?)
 function M.fetch(scope_root, pr_info, callback)
-  local repo_slug, slug_err = get_repo_slug(scope_root)
+  local repo_slug, slug_err = gh.get_repo_slug(scope_root)
   if not repo_slug then
     callback(nil, slug_err or "Failed to determine repository slug")
     return
@@ -418,6 +407,8 @@ function M.fetch(scope_root, pr_info, callback)
   }
 
   local result = {}
+  local skipped = 0
+  local reason_counts = {}
   for _, thread in ipairs(threads) do
     if thread.isResolved ~= true then
       local validation_err = M.validate(thread)
@@ -426,13 +417,31 @@ function M.fetch(scope_root, pr_info, callback)
         return
       end
 
-      for _, comment in ipairs(M.normalize(thread, ctx)) do
-        table.insert(result, comment)
+      local comments, skip_reason = M.normalize(thread, ctx)
+      if skip_reason then
+        skipped = skipped + 1
+        reason_counts[skip_reason] = (reason_counts[skip_reason] or 0) + 1
+      else
+        for _, comment in ipairs(comments) do
+          table.insert(result, comment)
+        end
       end
     end
   end
 
+  if skipped > 0 then
+    local reasons = {}
+    for reason, count in pairs(reason_counts) do
+      table.insert(reasons, string.format("%d %s", count, reason))
+    end
+    vim.notify(
+      string.format("Skipped %d PR review thread(s): %s", skipped, table.concat(reasons, ", ")),
+      vim.log.levels.WARN
+    )
+  end
+
   result.repository = repo_slug
+  result.skipped = skipped
   callback(result, nil)
 end
 

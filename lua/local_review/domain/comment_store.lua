@@ -524,6 +524,7 @@ end
 ---@field inserted integer
 ---@field updated integer
 ---@field resolved integer
+---@field skipped integer?
 
 ---@param existing LocalReviewComment[]
 ---@param fetched LocalReviewComment[]

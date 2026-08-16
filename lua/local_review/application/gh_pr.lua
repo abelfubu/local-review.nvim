@@ -1,6 +1,7 @@
 local context = require("local_review.infrastructure.context")
 local storage = require("local_review.infrastructure.storage")
 local store = require("local_review.domain.comment_store")
+local gh = require("local_review.infrastructure.gh")
 
 ---What may be submitted as a GitHub review: local comments only. This is a
 ---gh_pr policy (mirroring export's own filter), not a domain primitive.
@@ -18,22 +19,8 @@ end
 
 local M = {}
 
-local function run(command, cwd)
-  local result = vim.system(command, { cwd = cwd, text = true }):wait()
-
-  if result.code ~= 0 then
-    return nil, vim.trim(result.stderr or result.stdout or "")
-  end
-
-  return vim.trim(result.stdout or "")
-end
-
-local function get_repo_slug(repo_root)
-  return run({ "gh", "repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name' }, repo_root)
-end
-
 function M.get_pr_info(repo_root)
-  local out, err = run({ "gh", "pr", "view", "--json", "number,headRefOid" }, repo_root)
+  local out, err = gh.run({ "gh", "pr", "view", "--json", "number,headRefOid" }, repo_root)
   if not out then
     return nil, err
   end
@@ -45,10 +32,6 @@ function M.get_pr_info(repo_root)
 
   return decoded, nil
 end
-
----For internal use by modules that need PR metadata but should not couple to
----the submit-review workflow.
-M._get_pr_info = M.get_pr_info
 
 ---@param callback fun(review_type: string)
 local function prompt_review_type(callback)
@@ -203,10 +186,10 @@ function M.submit_review(path_comments, event, body, pr_info, repo_root)
   f:write(json_str)
   f:close()
 
-  local repo_slug, repo_err = get_repo_slug(repo_root)
+  local repo_slug, repo_err = gh.get_repo_slug(repo_root)
   local result, submit_err
   if repo_slug then
-    result, submit_err = run({
+    result, submit_err = gh.run({
       "gh",
       "api",
       string.format("repos/%s/pulls/%s/reviews", repo_slug, pr_info.number),

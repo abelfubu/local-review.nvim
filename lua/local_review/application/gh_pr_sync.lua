@@ -43,7 +43,58 @@ function M.sync(scope_root, pr_info, callback)
       end
     end
 
+    if fetched.skipped and fetched.skipped > 0 then
+      result.stats.skipped = fetched.skipped
+    end
+
     callback(true, nil, result.stats)
+  end)
+end
+
+---Pull PR comments for the current context and notify the user.
+function M.pull()
+  local context = require("local_review.infrastructure.context")
+  local gh_pr = require("local_review.application.gh_pr")
+
+  local ctx, ctx_err = context.comment_context()
+  if not ctx then
+    vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+    return
+  end
+
+  local pr_info, pr_err = gh_pr.get_pr_info(ctx.scope_root)
+  if not pr_info then
+    vim.notify(pr_err or "No PR found for current branch.", vim.log.levels.ERROR)
+    return
+  end
+
+  M.sync(ctx.scope_root, pr_info, function(ok, err, stats)
+    if not ok then
+      vim.notify("Failed to pull PR comments:\n" .. (err or "Unknown error"), vim.log.levels.ERROR)
+      return
+    end
+
+    if
+      stats
+      and (stats.inserted > 0 or stats.updated > 0 or stats.resolved > 0 or (stats.skipped and stats.skipped > 0))
+    then
+      local message = string.format(
+        "Pulled PR comments: %d new, %d updated, %d resolved",
+        stats.inserted,
+        stats.updated,
+        stats.resolved
+      )
+      if stats.skipped and stats.skipped > 0 then
+        message = message .. string.format(", %d skipped", stats.skipped)
+      end
+      vim.notify(message, vim.log.levels.INFO)
+      vim.api.nvim_exec_autocmds("User", {
+        pattern = "LocalReviewChanged",
+        data = { scope_root = ctx.scope_root },
+      })
+    else
+      vim.notify("No new PR comments.", vim.log.levels.INFO)
+    end
   end)
 end
 

@@ -566,6 +566,25 @@ describe("gh_pr_comments", function()
         assert.are.equal("/repo", process.cwd)
       end
     end)
+
+    it("passes owner, repo, and pr variables to the graphql query", function()
+      local captured
+      graphql_handler = function(_, variables)
+        captured = variables
+        return graphql_page({ make_thread("t1") }, false)
+      end
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.is_not_nil(captured)
+      assert.are.equal("owner", captured.owner)
+      assert.are.equal("repo", captured.repo)
+      assert.are.equal("4", captured.pr)
+      assert.are.equal("gh:t1-c1", result[1].id)
+    end)
   end)
 
   describe("captured fixture", function()

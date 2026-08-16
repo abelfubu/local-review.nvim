@@ -21,6 +21,8 @@ application → presentation). Run it with the commit gate.
 1. **Downward only.** Presentation → application → infrastructure → domain.
 2. **No sideways edges in application.** `export` and `gh_pr` must not import `comments`;
    they compose `context` (path resolution) + `storage` (queries/mutations) + `comment_store` (rules).
+   `gh_pr_sync` is an allowed exception: it may compose `gh_pr` and `gh_pr_comments` to
+   orchestrate the `:LocalReviewGhPull` workflow.
 3. **Domain never imports vim-coupled modules.** `comment_store` and `positioning` stay pure Lua
    so they run under busted without a Neovim instance. Domain functions declare preconditions
    (e.g. "paths are absolute and normalized"); infrastructure establishes them.
@@ -87,7 +89,8 @@ complete, changed sync.
 
 - **Remote comments are read-only.** `origin == "github"` comments cannot be edited, deleted,
   submitted, or cleared by export/submit cleanup. Enforced in `comment_store` (rules) and
-  `storage` (removal policy) — not at call sites.
+  `storage` (removal policy) — not at call sites. Sync reconciliation is the designated
+  writer of remote comments; user flows (comment, delete, export, submit) remain read-only.
 - **`origin` is the single discriminator.** Guards check `origin`, never `remote ~= nil`.
 - **Storage normalizes at the boundary.** Comments are created complete by `upsert_comment`; readers trust the shape. (If the plugin gains external users or the schema changes, reintroduce defaults-on-load here.)
 - **A comment lives in exactly one scope**: the one whose root contains its `absolute_path`.
