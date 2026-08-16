@@ -575,6 +575,25 @@ describe("gh_pr_comments", function()
       assert.is_nil(ids["pending"])
     end)
 
+    it("drops reviews with whitespace-only bodies", function()
+      graphql_handler = function(_, _)
+        return graphql_page({}, false, nil, {
+          make_review("spaces", { body = "   " }),
+          make_review("tabs-newlines", { body = "\n\t  \n" }),
+          make_review("real", { body = "Real feedback" }),
+        })
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(1, #result.reviews)
+      assert.are.equal("real", result.reviews[1].id)
+    end)
+
     it("returns an empty result for a PR with no review threads", function()
       next_system_result = { code = 0, stdout = vim.json.encode(graphql_page({}, false)), stderr = "" }
       local result, err

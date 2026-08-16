@@ -547,7 +547,7 @@ function M.fetch(scope_root, pr_info, callback)
 
   local review_bodies = {}
   for _, review in ipairs(reviews) do
-    if review.body and review.body ~= "" and review.state ~= "PENDING" then
+    if review.body and review.body:match("%S") and review.state ~= "PENDING" then
       table.insert(review_bodies, {
         id = review.id,
         author = review.author and review.author.login,
