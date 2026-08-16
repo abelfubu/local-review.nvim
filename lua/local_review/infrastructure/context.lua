@@ -1,5 +1,8 @@
 local M = {}
 
+---@type table<string, string>
+local branch_cache = {}
+
 local function normalize(path)
   return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
 end
@@ -54,6 +57,11 @@ function M.current_branch(path)
   end
 
   local normalized = normalize(target)
+  local cached = branch_cache[normalized]
+  if cached ~= nil then
+    return cached
+  end
+
   local directory = normalized
   if vim.fn.isdirectory(normalized) == 0 then
     directory = vim.fn.fnamemodify(normalized, ":h")
@@ -64,7 +72,30 @@ function M.current_branch(path)
     return nil
   end
 
-  return result[1]
+  local branch = result[1]
+  -- `git rev-parse --abbrev-ref HEAD` returns the literal string "HEAD" in a
+  -- detached-HEAD state, so two different detached commits would otherwise
+  -- compare equal. Append the short commit hash to keep them distinct.
+  if branch == "HEAD" then
+    local short = vim.fn.systemlist({ "git", "-C", directory, "rev-parse", "--short", "HEAD" })
+    if short[1] and short[1] ~= "" then
+      branch = "HEAD@" .. short[1]
+    end
+  end
+
+  branch_cache[normalized] = branch
+  return branch
+end
+
+---Invalidate cached branch lookups. When `path` is omitted, the entire cache
+---is cleared.
+---@param path string?
+function M.invalidate_branch_cache(path)
+  if path == nil or path == "" then
+    branch_cache = {}
+  else
+    branch_cache[normalize(path)] = nil
+  end
 end
 
 function M.scope_root(path)

@@ -187,6 +187,13 @@ function M.setup(opts)
       end,
     })
 
+    vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
+      group = vim.api.nvim_create_augroup("local-review-branch-cache", { clear = true }),
+      callback = function()
+        require("local_review.infrastructure.context").invalidate_branch_cache()
+      end,
+    })
+
     state.configured = true
   end
 

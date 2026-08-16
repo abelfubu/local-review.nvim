@@ -177,6 +177,31 @@ describe("GitHub PR comment sync", function()
     assert.are.equal(1, #session_state["/repo"].comments)
   end)
 
+  it("warns when branch resolution fails", function()
+    fetch_result = { remote_comment(), repository = "owner/repo" }
+    current_branch = nil
+
+    local warnings = {}
+    _G.vim = {
+      log = { levels = { WARN = 3 } },
+      notify = function(message, level)
+        if level == _G.vim.log.levels.WARN then
+          warnings[#warnings + 1] = message
+        end
+      end,
+    }
+
+    local ok
+    require("local_review.application.gh_pr_sync").sync("/repo", { number = 42 }, function(r_ok)
+      ok = r_ok
+    end)
+
+    assert.is_true(ok)
+    assert.are.equal("", session_state["/repo"].branch)
+    assert.are.equal(1, #warnings)
+    assert.is_not_nil(warnings[1]:find("branch", 1, true))
+  end)
+
   it("replaces the session set even when nothing changed", function()
     session_state["/repo"] = { comments = { remote_comment() }, pull_number = 42, branch = "feature" }
     fetch_result = { remote_comment(), repository = "owner/repo" }
@@ -279,7 +304,7 @@ describe("GitHub PR comment pull", function()
     assert.are.equal(1, #sync_calls)
     assert.are.equal("/repo", sync_calls[1].scope_root)
     assert.are.equal(pr_info, sync_calls[1].info)
-    assert.are.equal("No new PR comments.", notifications[#notifications].message)
+    assert.are.equal("No PR comments found — cleared previous session.", notifications[#notifications].message)
     assert.are.equal(vim.log.levels.INFO, notifications[#notifications].level)
   end)
 

@@ -27,8 +27,14 @@ function M.sync(scope_root, pr_info, callback)
       return
     end
 
-    local branch = context.current_branch(scope_root) or ""
-    gh_session.set(scope_root, fetched, pr_info.number, branch)
+    local branch = context.current_branch(scope_root)
+    if not branch then
+      vim.notify(
+        "Failed to resolve the current git branch; pulled PR comments will be hidden until the branch is available.",
+        vim.log.levels.WARN
+      )
+    end
+    gh_session.set(scope_root, fetched, pr_info.number, branch or "")
 
     callback(true, nil, { count = #fetched })
   end)
@@ -71,7 +77,7 @@ function M.pull()
     if stats and stats.count and stats.count > 0 then
       vim.notify(string.format("Pulled %d PR comments.", stats.count), vim.log.levels.INFO)
     else
-      vim.notify("No new PR comments.", vim.log.levels.INFO)
+      vim.notify("No PR comments found — cleared previous session.", vim.log.levels.INFO)
     end
     vim.api.nvim_exec_autocmds("User", {
       pattern = "LocalReviewChanged",

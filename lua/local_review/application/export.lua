@@ -48,10 +48,7 @@ local function export_lines(path)
     return nil, resolve_err or "Failed to resolve export path."
   end
 
-  local exportable_comments, list_err = comments_for_path(target.scope_root, target.path, target.kind)
-  if not exportable_comments then
-    return nil, list_err or "Failed to load comments."
-  end
+  local exportable_comments = comments_for_path(target.scope_root, target.path, target.kind)
 
   if #exportable_comments == 0 then
     return {
