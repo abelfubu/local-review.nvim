@@ -28,6 +28,32 @@ local function box_width(bufnr)
   return math.max(8, win_width - textoff)
 end
 
+local function split_at_display_width(text, width)
+  if width <= 0 then
+    return "", text
+  end
+
+  local chars = vim.fn.strchars(text)
+  if chars == 0 then
+    return "", ""
+  end
+
+  local low, high = 0, chars
+  while low < high do
+    local mid = math.ceil((low + high) / 2)
+    local part = vim.fn.strcharpart(text, 0, mid)
+    if vim.fn.strdisplaywidth(part) <= width then
+      low = mid
+    else
+      high = mid - 1
+    end
+  end
+
+  local prefix = vim.fn.strcharpart(text, 0, low)
+  local rest = vim.fn.strcharpart(text, low, chars - low)
+  return prefix, rest
+end
+
 local function wrap_line(text, width)
   if width <= 0 then
     return {}
@@ -35,12 +61,14 @@ local function wrap_line(text, width)
 
   local lines = {}
   while text ~= "" do
-    local part = vim.fn.strcharpart(text, 0, width)
+    local part, rest = split_at_display_width(text, width)
     if part == "" then
-      part = text
+      -- Even one character exceeds the budget; take it anyway to avoid looping.
+      part = vim.fn.strcharpart(text, 0, 1)
+      rest = vim.fn.strcharpart(text, 1, vim.fn.strchars(text) - 1)
     end
     lines[#lines + 1] = part
-    text = vim.fn.strcharpart(text, vim.fn.strchars(part), 2147483647)
+    text = rest
   end
   return lines
 end
@@ -94,9 +122,18 @@ local function border_bottom(width)
   return "└" .. string.rep("─", width - 2) .. "┘"
 end
 
+local function truncate_to_width(text, width)
+  if vim.fn.strdisplaywidth(text) <= width then
+    return text
+  end
+  local prefix, _ = split_at_display_width(text, width)
+  return prefix
+end
+
 local function body_virt_line(text, width)
   local inner = width - 4
-  local padded = pad(text, inner)
+  local truncated = truncate_to_width(text, inner)
+  local padded = pad(truncated, inner)
   return {
     { "│ ", "FloatBorder" },
     { padded, "NormalFloat" },

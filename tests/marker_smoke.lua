@@ -1,4 +1,4 @@
--- Marker smoke test for inline comment box truncation.
+-- Marker smoke test for inline comment box truncation and wide-character alignment.
 -- Run with: nvim --headless -u NONE -l tests/marker_smoke.lua
 
 local plugin_root = vim.uv.cwd()
@@ -104,6 +104,51 @@ for index, virt_line in ipairs(virt_lines) do
   if index ~= 1 and index ~= #virt_lines then
     local text = virt_line[2] and virt_line[2][1] or ""
     assert(not text:find("K to read"), "short marker unexpectedly rendered truncation hint")
+  end
+end
+
+-- Wide-character body: CJK characters have display width 2, so wrapping by
+-- character count would overflow the inner box width. Verify every rendered
+-- line is exactly the expected box width and that body chunks fit inside it.
+vim.api.nvim_buf_clear_namespace(source_bufnr, namespace, 0, -1)
+local wide_comment = vim.deepcopy(long_comment)
+wide_comment.id = "local:wide"
+wide_comment.body = "一二三四五六七八九十"
+vim.fn.writefile({ vim.json.encode({ scope_root = scope_root, comments = { wide_comment } }) }, scope_file)
+
+require("local_review.presentation.markers").refresh(source_bufnr)
+extmarks = vim.api.nvim_buf_get_extmarks(source_bufnr, namespace, { 0, 0 }, { -1, -1 }, { details = true })
+virt_lines = nil
+for _, extmark in ipairs(extmarks) do
+  if extmark[4] and extmark[4].virt_lines then
+    virt_lines = extmark[4].virt_lines
+    break
+  end
+end
+assert(virt_lines, "wide marker extmark has no virt_lines")
+
+local winid = vim.fn.bufwinid(source_bufnr)
+local win_width = vim.api.nvim_win_get_width(winid)
+local textoff = vim.fn.getwininfo(winid)[1].textoff
+local box_width = math.max(8, win_width - textoff)
+local inner = box_width - 4
+
+for index, virt_line in ipairs(virt_lines) do
+  local is_border = index == 1 or index == #virt_lines
+  if not is_border then
+    local line_text = ""
+    for _, chunk in ipairs(virt_line) do
+      line_text = line_text .. (chunk[1] or "")
+    end
+    local line_width = vim.fn.strdisplaywidth(line_text)
+    assert(
+      line_width == box_width,
+      string.format("line %d width %d ~= %d: %q", index, line_width, box_width, line_text)
+    )
+
+    local body_chunk = virt_line[2] and virt_line[2][1] or ""
+    local body_width = vim.fn.strdisplaywidth(body_chunk)
+    assert(body_width <= inner, string.format("line %d body width %d > inner %d", index, body_width, inner))
   end
 end
 
