@@ -142,6 +142,18 @@ describe("GitHub PR reviews", function()
     assert.are.equal(1, #processes)
   end)
 
+  it("submits an approve review without comments", function()
+    path_comments = {}
+    review_choice = "Approve"
+    summary_input = ""
+
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
+
+    assert.are.equal("APPROVE", encoded_payload.event)
+    assert.are.equal(0, #encoded_payload.comments)
+    assert.is_nil(removed_ids)
+  end)
+
   it("submits the review against the remote PR head", function()
     summary_input = "Review summary"
 

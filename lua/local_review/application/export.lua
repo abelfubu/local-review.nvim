@@ -137,6 +137,11 @@ function M.open_export(path, opts)
     local removed, clear_err = storage.remove_comments_for_path(target.scope_root, target.path, target.kind)
     if not removed then
       vim.notify(clear_err or "Failed to clear exported comments.", vim.log.levels.ERROR)
+    elseif #removed > 0 then
+      vim.api.nvim_exec_autocmds("User", {
+        pattern = "LocalReviewChanged",
+        data = { scope_root = target.scope_root },
+      })
     end
   end
 end

@@ -108,6 +108,23 @@ local function comment_virt_lines(comment, width)
   return virt_lines
 end
 
+---Refreshes markers on every loaded file buffer belonging to the scope.
+---@param scope_root string
+function M.refresh_scope(scope_root)
+  local context = require("local_review.infrastructure.context")
+  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].buftype == "" then
+      local path = vim.api.nvim_buf_get_name(bufnr)
+      if path ~= "" then
+        local root = context.scope_root(path)
+        if root == scope_root then
+          M.refresh(bufnr)
+        end
+      end
+    end
+  end
+end
+
 function M.refresh(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) or vim.bo[bufnr].buftype ~= "" then
     return

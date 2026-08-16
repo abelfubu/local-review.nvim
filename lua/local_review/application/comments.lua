@@ -32,19 +32,13 @@ local function current_line()
   return vim.api.nvim_win_get_cursor(0)[1]
 end
 
+---Announces that comments in the scope changed; presentation subscribes via
+---the `User`/`LocalReviewChanged` autocmd registered in init.lua.
 local function refresh_scope_buffers(scope_root)
-  local markers = require("local_review.presentation.markers")
-  for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].buftype == "" then
-      local path = vim.api.nvim_buf_get_name(bufnr)
-      if path ~= "" then
-        local root = context.scope_root(path)
-        if root == scope_root then
-          markers.refresh(bufnr)
-        end
-      end
-    end
-  end
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "LocalReviewChanged",
+    data = { scope_root = scope_root },
+  })
 end
 
 local function persist_scope_state(scope_root, data)

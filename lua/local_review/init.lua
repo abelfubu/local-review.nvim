@@ -162,6 +162,16 @@ function M.setup(opts)
       end,
     })
 
+    vim.api.nvim_create_autocmd("User", {
+      group = vim.api.nvim_create_augroup("local-review-changed", { clear = true }),
+      pattern = "LocalReviewChanged",
+      callback = function(event)
+        if event.data and event.data.scope_root then
+          require("local_review.presentation.markers").refresh_scope(event.data.scope_root)
+        end
+      end,
+    })
+
     state.configured = true
   end
 

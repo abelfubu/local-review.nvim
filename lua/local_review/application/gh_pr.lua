@@ -114,11 +114,6 @@ function M.create_review(path, opts)
   end
   local path_comments = storage.comments_for_path(repo_root, target_path, kind)
 
-  if not path_comments or #path_comments == 0 then
-    vim.notify("No comments to submit", vim.log.levels.WARN)
-    return
-  end
-
   for _, comment in ipairs(path_comments) do
     if comment.stale then
       vim.notify("Cannot submit stale comments. Recreate or delete them first.", vim.log.levels.ERROR)
@@ -127,10 +122,6 @@ function M.create_review(path, opts)
   end
 
   local submittable_comments = store.submittable(path_comments)
-  if #submittable_comments == 0 then
-    vim.notify("No comments to submit", vim.log.levels.WARN)
-    return
-  end
 
   local pr_info, err = get_pr_info(repo_root)
   if not pr_info then
@@ -147,7 +138,7 @@ function M.create_review(path, opts)
       end
 
       vim.notify("PR review submitted: " .. event, vim.log.levels.INFO)
-      if opts and opts.clear_after_export then
+      if opts and opts.clear_after_export and #submittable_comments > 0 then
         local submitted_ids = {}
         for _, comment in ipairs(submittable_comments) do
           submitted_ids[#submitted_ids + 1] = comment.id
@@ -155,6 +146,11 @@ function M.create_review(path, opts)
         local cleared, clear_err = storage.remove_comments_by_ids(repo_root, submitted_ids)
         if not cleared then
           vim.notify("Failed to clear submitted comments: " .. (clear_err or "Unknown error"), vim.log.levels.ERROR)
+        elseif #cleared > 0 then
+          vim.api.nvim_exec_autocmds("User", {
+            pattern = "LocalReviewChanged",
+            data = { scope_root = repo_root },
+          })
         end
       end
     end)
