@@ -1,6 +1,7 @@
 local M = {}
 
 local context = require("local_review.infrastructure.context")
+local comments = require("local_review.application.comments")
 local storage = require("local_review.infrastructure.storage")
 local store = require("local_review.domain.comment_store")
 local export_indent_width = 3
@@ -47,8 +48,10 @@ local function export_lines(path)
     return nil, resolve_err or "Failed to resolve export path."
   end
 
-  local exportable_comments =
-    get_exportable_comments(storage.comments_for_path(target.scope_root, target.path, target.kind))
+  local exportable_comments, list_err = comments.list_comments_in_path(target.path)
+  if not exportable_comments then
+    return nil, list_err or "Failed to load comments."
+  end
 
   if #exportable_comments == 0 then
     return {

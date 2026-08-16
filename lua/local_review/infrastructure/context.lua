@@ -45,6 +45,28 @@ function M.repo_root(path)
   return normalize(result[1])
 end
 
+---@param path string?
+---@return string?
+function M.current_branch(path)
+  local target = path
+  if target == nil or target == "" then
+    target = vim.fn.getcwd()
+  end
+
+  local normalized = normalize(target)
+  local directory = normalized
+  if vim.fn.isdirectory(normalized) == 0 then
+    directory = vim.fn.fnamemodify(normalized, ":h")
+  end
+
+  local result = vim.fn.systemlist({ "git", "-C", directory, "rev-parse", "--abbrev-ref", "HEAD" })
+  if vim.v.shell_error ~= 0 or result[1] == nil or result[1] == "" then
+    return nil
+  end
+
+  return result[1]
+end
+
 function M.scope_root(path)
   local normalized = M.normalize_path(path)
   if not normalized then

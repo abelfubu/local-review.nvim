@@ -129,6 +129,16 @@ function M.load_scope(scope_root)
   local path = M.scope_file(scope_root)
   local data = load_json(path)
 
+  -- Legacy migration: remote comments used to be persisted but now live in
+  -- the per-session in-memory store only. Drop any persisted remotes.
+  local comments = {}
+  for _, comment in ipairs(data.comments or {}) do
+    if comment.origin ~= "github" then
+      table.insert(comments, comment)
+    end
+  end
+  data.comments = comments
+
   -- Record the disk fingerprint so subsequent writes can detect clobbering.
   last_known[scope_root] = { hash = file_hash(path) }
 

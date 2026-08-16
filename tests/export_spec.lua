@@ -24,6 +24,7 @@ describe("export", function()
     notifications = {}
 
     package.loaded["local_review.application.export"] = nil
+    package.loaded["local_review.application.comments"] = nil
     package.loaded["local_review.infrastructure.storage"] = nil
     package.loaded["local_review.infrastructure.context"] = nil
     package.loaded["local_review"] = nil
@@ -41,14 +42,18 @@ describe("export", function()
       }
     end
 
+    package.preload["local_review.application.comments"] = function()
+      return {
+        list_comments_in_path = function(path)
+          return path_comments, path, "directory", "/repo"
+        end,
+      }
+    end
+
     package.preload["local_review.infrastructure.storage"] = function()
       return {
-        comments_for_path = function(_, _, _)
-          return path_comments
-        end,
         remove_comments_for_path = function(scope_root, path, kind)
           remove_args = { scope_root = scope_root, path = path, kind = kind }
-          removed_comments = { path_comments[1] }
           return removed_comments, nil
         end,
       }
@@ -106,9 +111,11 @@ describe("export", function()
 
   after_each(function()
     package.preload["local_review"] = nil
+    package.preload["local_review.application.comments"] = nil
     package.preload["local_review.infrastructure.storage"] = nil
     package.preload["local_review.infrastructure.context"] = nil
     package.loaded["local_review"] = nil
+    package.loaded["local_review.application.comments"] = nil
     package.loaded["local_review.infrastructure.storage"] = nil
     package.loaded["local_review.infrastructure.context"] = nil
     package.loaded["local_review.application.export"] = nil
@@ -222,6 +229,7 @@ describe("export", function()
 
   it("preserves remote comments when clearing after export", function()
     path_comments = { local_comment(), remote_comment() }
+    removed_comments = { path_comments[1] }
 
     local export = require("local_review.application.export")
     export.open_export("/repo", { clear_after_export = true })
