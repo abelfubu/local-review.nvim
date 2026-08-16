@@ -59,6 +59,22 @@ local function wrapped_body_lines(body, text_width)
   return result
 end
 
+local max_visible_body_lines = 3
+
+local function truncated_body_lines(body, text_width)
+  local wrapped = wrapped_body_lines(body, text_width)
+  if #wrapped <= max_visible_body_lines then
+    return wrapped
+  end
+
+  local result = {}
+  for i = 1, max_visible_body_lines do
+    result[i] = wrapped[i]
+  end
+  result[max_visible_body_lines + 1] = "… (K to read)"
+  return result
+end
+
 local function pad(text, width)
   local pad_len = math.max(0, width - vim.fn.strdisplaywidth(text))
   return text .. string.rep(" ", pad_len)
@@ -113,7 +129,7 @@ local function comment_virt_lines(comment, width)
 
   local virt_lines = {}
   virt_lines[#virt_lines + 1] = { { top, "FloatBorder" } }
-  for _, line in ipairs(wrapped_body_lines(comment.body, inner)) do
+  for _, line in ipairs(truncated_body_lines(comment.body, inner)) do
     virt_lines[#virt_lines + 1] = body_virt_line(line, width)
   end
   virt_lines[#virt_lines + 1] = { { bottom, "FloatBorder" } }
