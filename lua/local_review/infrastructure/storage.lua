@@ -1,4 +1,4 @@
-local comment_store = require("local_review.comment_store")
+local comment_store = require("local_review.domain.comment_store")
 
 local M = {}
 

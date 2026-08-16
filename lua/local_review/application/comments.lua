@@ -1,9 +1,9 @@
 local M = {}
 
-local context = require("local_review.context")
-local positioning = require("local_review.positioning")
-local storage = require("local_review.storage")
-local comment_store = require("local_review.comment_store")
+local context = require("local_review.infrastructure.context")
+local positioning = require("local_review.domain.positioning")
+local storage = require("local_review.infrastructure.storage")
+local comment_store = require("local_review.domain.comment_store")
 
 local state = {
   file_fingerprints = {},
@@ -33,7 +33,7 @@ local function current_line()
 end
 
 local function refresh_scope_buffers(scope_root)
-  local markers = require("local_review.markers")
+  local markers = require("local_review.presentation.markers")
   for _, bufnr in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_loaded(bufnr) and vim.bo[bufnr].buftype == "" then
       local path = vim.api.nvim_buf_get_name(bufnr)

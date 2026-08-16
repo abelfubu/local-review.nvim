@@ -1,6 +1,6 @@
 local M = {}
 
-local comments = require("local_review.comments")
+local comments = require("local_review.application.comments")
 
 local namespace = vim.api.nvim_create_namespace("local-review-ui")
 local placeholder_namespace = vim.api.nvim_create_namespace("local-review-ui-placeholder")
@@ -157,7 +157,7 @@ function M.close_active()
   state.closing = true
   local source_bufnr = state.source_bufnr
   close_window()
-  require("local_review.markers").refresh(source_bufnr)
+  require("local_review.presentation.markers").refresh(source_bufnr)
   return true
 end
 
@@ -435,7 +435,7 @@ function M.open_current_line(range)
 
   -- Hide the persisted box for the line being edited; it is drawn again by
   -- the refresh in M.close_active().
-  require("local_review.markers").refresh(source_bufnr)
+  require("local_review.presentation.markers").refresh(source_bufnr)
 
   vim.wo[winid].wrap = true
   vim.wo[winid].linebreak = true

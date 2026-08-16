@@ -7,7 +7,7 @@ package.path = table.concat({
   package.path,
 }, ";")
 
-local positioning = require("local_review.positioning")
+local positioning = require("local_review.domain.positioning")
 
 ---@param text string
 ---@return string

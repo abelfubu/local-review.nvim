@@ -35,7 +35,7 @@ local function visual_safe_cmd(command_name)
     if mode:match("^[vV\22]") then
       vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
       if command_name == "LocalReviewComment" then
-        require("local_review.ui").set_pending_range(vim.fn.getpos("'<")[2], vim.fn.getpos("'>")[2])
+        require("local_review.presentation.ui").set_pending_range(vim.fn.getpos("'<")[2], vim.fn.getpos("'>")[2])
       end
     end
     vim.cmd(command_name)
@@ -43,11 +43,14 @@ local function visual_safe_cmd(command_name)
 end
 
 local function refresh_current_buffer(bufnr)
-  require("local_review.markers").refresh((bufnr and bufnr ~= 0) and bufnr or vim.api.nvim_get_current_buf())
+  require("local_review.presentation.markers").refresh(
+    (bufnr and bufnr ~= 0) and bufnr or vim.api.nvim_get_current_buf()
+  )
 end
 
 local function list_comments(path)
-  local path_comments, err = require("local_review.comments").list_comments_in_path(path ~= "" and path or nil)
+  local path_comments, err =
+    require("local_review.application.comments").list_comments_in_path(path ~= "" and path or nil)
   if not path_comments then
     vim.notify(err or "Failed to list review comments.", vim.log.levels.WARN)
     return
@@ -95,7 +98,7 @@ function M.setup(opts)
   vim.api.nvim_set_hl(0, "LocalReviewEditorTitle", { link = "Number", default = true })
 
   local function jump_and_echo(direction)
-    local comments = require("local_review.comments")
+    local comments = require("local_review.application.comments")
     comments.jump(direction)
     local line = vim.api.nvim_win_get_cursor(0)[1]
     local line_state = comments.get_line_state(0, line)
@@ -117,11 +120,11 @@ function M.setup(opts)
       if command_opts.range and command_opts.range > 0 then
         range = { command_opts.line1, command_opts.line2 }
       end
-      require("local_review.ui").open_current_line(range)
+      require("local_review.presentation.ui").open_current_line(range)
     end, { range = true })
 
     command("LocalReviewDelete", function()
-      require("local_review.comments").delete_current_line()
+      require("local_review.application.comments").delete_current_line()
     end, {})
 
     command("LocalReviewNext", function()
@@ -133,19 +136,19 @@ function M.setup(opts)
     end, {})
 
     command("LocalReviewGh", function(command_opts)
-      require("local_review.gh_pr").create_review(command_opts.args, { clear_after_export = true })
+      require("local_review.application.gh_pr").create_review(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
 
     command("LocalReviewExport", function(command_opts)
-      require("local_review.export").open_export(command_opts.args, { clear_after_export = true })
+      require("local_review.application.export").open_export(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
 
     command("LocalReviewExportPreserve", function(command_opts)
-      require("local_review.export").open_export_preserve(command_opts.args)
+      require("local_review.application.export").open_export_preserve(command_opts.args)
     end, { nargs = "?" })
 
     command("LocalReviewClear", function(command_opts)
-      require("local_review.comments").clear_path(command_opts.args)
+      require("local_review.application.comments").clear_path(command_opts.args)
     end, { nargs = "?" })
 
     command("LocalReviewList", function(command_opts)

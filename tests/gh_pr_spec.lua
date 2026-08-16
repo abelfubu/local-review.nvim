@@ -40,10 +40,10 @@ describe("GitHub PR reviews", function()
       },
     }
 
-    package.loaded["local_review.gh_pr"] = nil
-    package.loaded["local_review.storage"] = nil
-    package.loaded["local_review.context"] = nil
-    package.preload["local_review.storage"] = function()
+    package.loaded["local_review.application.gh_pr"] = nil
+    package.loaded["local_review.infrastructure.storage"] = nil
+    package.loaded["local_review.infrastructure.context"] = nil
+    package.preload["local_review.infrastructure.storage"] = function()
       return {
         comments_for_path = function(_, _, _)
           return path_comments
@@ -57,7 +57,7 @@ describe("GitHub PR reviews", function()
         end,
       }
     end
-    package.preload["local_review.context"] = function()
+    package.preload["local_review.infrastructure.context"] = function()
       return {
         default_export_root = function()
           return "/repo"
@@ -127,16 +127,16 @@ describe("GitHub PR reviews", function()
   end)
 
   after_each(function()
-    package.preload["local_review.storage"] = nil
-    package.preload["local_review.context"] = nil
-    package.loaded["local_review.storage"] = nil
-    package.loaded["local_review.context"] = nil
-    package.loaded["local_review.gh_pr"] = nil
+    package.preload["local_review.infrastructure.storage"] = nil
+    package.preload["local_review.infrastructure.context"] = nil
+    package.loaded["local_review.infrastructure.storage"] = nil
+    package.loaded["local_review.infrastructure.context"] = nil
+    package.loaded["local_review.application.gh_pr"] = nil
     _G.vim = nil
   end)
 
   it("does not submit or clear comments when the summary prompt is cancelled", function()
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     -- One command is used to discover the PR before prompting.
     assert.are.equal(1, #processes)
@@ -145,7 +145,7 @@ describe("GitHub PR reviews", function()
   it("submits the review against the remote PR head", function()
     summary_input = "Review summary"
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = false })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = false })
 
     assert.are.equal("pr-head", encoded_payload.commit_id)
   end)
@@ -153,7 +153,7 @@ describe("GitHub PR reviews", function()
   it("runs GitHub commands in the repository selected by path", function()
     summary_input = "Review summary"
 
-    require("local_review.gh_pr").create_review("/repo/lua/example.lua", { clear_after_export = false })
+    require("local_review.application.gh_pr").create_review("/repo/lua/example.lua", { clear_after_export = false })
 
     assert.is_true(#processes > 0)
     for _, process in ipairs(processes) do
@@ -165,7 +165,7 @@ describe("GitHub PR reviews", function()
     path_comments[1].stale = true
     summary_input = "Review summary"
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     assert.are.equal(0, #processes)
   end)
@@ -173,7 +173,7 @@ describe("GitHub PR reviews", function()
   it("clears only comments included in a successful submission", function()
     summary_input = "Review summary"
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     assert.same({ "comment-1" }, removed_ids)
   end)
@@ -181,7 +181,7 @@ describe("GitHub PR reviews", function()
   it("requires a summary for comment reviews", function()
     summary_input = ""
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     assert.are.equal(1, #processes)
     assert.is_nil(removed_ids)
@@ -191,7 +191,7 @@ describe("GitHub PR reviews", function()
     review_choice = "Request Changes"
     summary_input = ""
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     assert.are.equal(1, #processes)
     assert.is_nil(removed_ids)
@@ -202,7 +202,7 @@ describe("GitHub PR reviews", function()
     remove_ok = nil
     remove_err = "disk full"
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     assert.are.equal("PR review submitted: COMMENT", notifications[#notifications - 1].message)
     assert.are.equal("Failed to clear submitted comments: disk full", notifications[#notifications].message)
@@ -213,7 +213,7 @@ describe("GitHub PR reviews", function()
     summary_input = "Review summary"
     remote_pr_info.headRefOid = nil
 
-    require("local_review.gh_pr").create_review(nil, { clear_after_export = true })
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     assert.are.equal(1, #processes)
     assert.are.equal("Failed to create PR review:\nPR head commit is missing", notifications[#notifications].message)

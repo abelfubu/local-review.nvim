@@ -7,7 +7,7 @@ package.path = table.concat({
   package.path,
 }, ";")
 
-local comment_store = require("local_review.comment_store")
+local comment_store = require("local_review.domain.comment_store")
 local helpers = require("tests.helpers.helpers")
 
 ---@return fun(): string

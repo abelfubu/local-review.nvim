@@ -1,7 +1,7 @@
 local M = {}
 
-local comments = require("local_review.comments")
-local context = require("local_review.context")
+local comments = require("local_review.application.comments")
+local context = require("local_review.infrastructure.context")
 local preview_namespace = vim.api.nvim_create_namespace("local-review-telescope-preview")
 
 local function telescope_modules()

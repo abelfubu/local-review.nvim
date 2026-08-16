@@ -23,7 +23,7 @@ local left_winid, right_winid = windows[1], windows[2]
 vim.api.nvim_set_current_win(right_winid)
 
 local source_bufnr = vim.api.nvim_get_current_buf()
-require("local_review.ui").open_current_line()
+require("local_review.presentation.ui").open_current_line()
 local editor_winid = vim.api.nvim_get_current_win()
 assert(editor_winid ~= right_winid, "comment editor did not open")
 local editor_col = vim.fn.win_screenpos(editor_winid)[2]
@@ -38,8 +38,11 @@ vim.wait(100, function()
 end)
 
 assert(not vim.api.nvim_win_is_valid(editor_winid), "comment editor remained open after changing splits")
-assert(require("local_review.ui").active_source_line(source_bufnr) == nil, "comment editor state remained active")
-local line_state = assert(require("local_review.comments").get_line_state(source_bufnr, 1))
+assert(
+  require("local_review.presentation.ui").active_source_line(source_bufnr) == nil,
+  "comment editor state remained active"
+)
+local line_state = assert(require("local_review.application.comments").get_line_state(source_bufnr, 1))
 assert(line_state.comment and line_state.comment.body == "split navigation comment", "comment was not saved")
 
 vim.fn.delete(storage_dir, "rf")

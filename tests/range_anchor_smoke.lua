@@ -11,7 +11,7 @@ vim.fn.mkdir(storage_dir, "p")
 
 require("local_review").setup({ storage_dir = storage_dir })
 
-local comments = require("local_review.comments")
+local comments = require("local_review.application.comments")
 
 local buf = vim.api.nvim_create_buf(true, false)
 vim.api.nvim_set_current_buf(buf)

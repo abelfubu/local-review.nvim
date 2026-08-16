@@ -4,11 +4,16 @@ local-review.nvim is organized in four layers. `require` edges must point **down
 a module may depend on its own layer or layers below it, never upward.
 
 ```
-presentation    init · ui · markers · telescope
-application     comments · export · gh_pr
-infrastructure  storage · context
-domain          comment_store · positioning        (vim-free, busted-tested)
+lua/local_review/
+├── init.lua                     (presentation: keymaps + commands)
+├── domain/        comment_store · positioning   (vim-free, busted-tested)
+├── application/   comments · export · gh_pr
+├── infrastructure/ storage · context
+└── presentation/  ui · markers · telescope
 ```
+
+Layer violations are greppable:
+`grep -rn 'require("local_review.\(application\|presentation\)' lua/local_review/domain/ lua/local_review/infrastructure/` must stay empty.
 
 ## Dependency rules
 
@@ -23,7 +28,7 @@ domain          comment_store · positioning        (vim-free, busted-tested)
 
 ## Module responsibilities
 
-### Domain — `comment_store.lua`
+### Domain — `domain/comment_store.lua`
 The rulebook. Everything that decides *what is true* about comments:
 
 - Comment lifecycle: `upsert_comment`, `remove_comment` (both enforce the remote read-only guard)
@@ -32,10 +37,10 @@ The rulebook. Everything that decides *what is true* about comments:
 - Anchoring: `apply_anchor`, `reconcile_*`, stale detection, `comment_sorter`
 - Data shape: `LocalReviewComment`, `ReviewMetadata` annotations
 
-### Domain — `positioning.lua`
+### Domain — `domain/positioning.lua`
 Text-anchor capture and resolution: how a comment finds its line after the file changes.
 
-### Infrastructure — `storage.lua`
+### Infrastructure — `infrastructure/storage.lua`
 The comment repository. The *only* module that knows comments live in per-scope JSON files
 (`stdpath("state")/local-review/<sha256(scope_root)>.json`). Hides file layout, hashing,
 last-writer-wins merge, and concurrency fingerprints behind a small interface:
@@ -44,20 +49,20 @@ last-writer-wins merge, and concurrency fingerprints behind a small interface:
 - Writes: `save_scope`, `delete_scope`, `remove_comments_for_path`, `remove_comments_by_ids`
 - Removal functions enforce the remote read-only policy: matched remote comments are always kept
 
-### Infrastructure — `context.lua`
+### Infrastructure — `infrastructure/context.lua`
 Path and scope resolution: `normalize_path`, `path_kind`, `scope_root` (git root),
 `relative_path`, `default_export_root`, `comment_context`. Owns `vim.fs`/`vim.fn.fnamemodify`.
 
-### Application — `comments.lua`
+### Application — `application/comments.lua`
 Buffer-coupled workflows: `set_line_comment`, `delete_line_comment`, `delete_current_line`,
 `comments_for_buffer`, `get_line_state`, `jump`, reconcile-on-load. Notifications for these
 flows live here.
 
-### Application — `export.lua`
+### Application — `application/export.lua`
 Export policy and format: `get_exportable_comments` (what may be exported), agent-readable
 text, clipboard write, clear-after-export.
 
-### Application — `gh_pr.lua`
+### Application — `application/gh_pr.lua`
 GitHub review submission: PR resolution, review prompt flow, `submit_review`,
 post-submit cleanup of submitted local comments.
 
@@ -95,5 +100,4 @@ Gate before every commit:
 | Item | Trigger |
 |---|---|
 | `editor.lua` vim adapter (buffer/cursor/register out of `comments.lua`) | First busted test needing to stub a workflow's vim calls |
-| `markers ↔ ui` circular require | Next time either file is touched |
-| Folder-per-layer (`domain/`, `app/`, …) | 15–20+ modules or a second maintainer |
+| `markers ↔ ui` circular require; `comments → markers` upward edge in `refresh_scope_buffers` | Flip to a `User` autocmd (`LocalReviewChanged`): application announces, presentation subscribes |

@@ -1,8 +1,8 @@
 local M = {}
 
-local context = require("local_review.context")
-local storage = require("local_review.storage")
-local store = require("local_review.comment_store")
+local context = require("local_review.infrastructure.context")
+local storage = require("local_review.infrastructure.storage")
+local store = require("local_review.domain.comment_store")
 local export_indent_width = 3
 local export_indent = string.rep(" ", export_indent_width)
 
