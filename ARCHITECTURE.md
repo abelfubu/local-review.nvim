@@ -81,6 +81,9 @@ post-submit cleanup of submitted local comments.
 - **Storage normalizes at the boundary.** Comments are created complete by `upsert_comment`; readers trust the shape. (If the plugin gains external users or the schema changes, reintroduce defaults-on-load here.)
 - **A comment lives in exactly one scope**: the one whose root contains its `absolute_path`.
   The same `context.scope_root` derivation is used at creation and query time.
+- **Data changes reach the UI via events, not imports.** Application modules fire
+  `User`/`LocalReviewChanged` (`data = { scope_root = ... }`) after mutations; `init.lua`
+  subscribes and calls `markers.refresh_scope`. Application never imports presentation.
 
 ## Testing strategy
 
@@ -100,4 +103,4 @@ Gate before every commit:
 | Item | Trigger |
 |---|---|
 | `editor.lua` vim adapter (buffer/cursor/register out of `comments.lua`) | First busted test needing to stub a workflow's vim calls |
-| `markers ↔ ui` circular require; `comments → markers` upward edge in `refresh_scope_buffers` | Flip to a `User` autocmd (`LocalReviewChanged`): application announces, presentation subscribes |
+| `markers ↔ ui` intra-layer cycle (both presentation; `markers` queries `ui.active_source_line` at draw time, `ui` calls `markers.refresh` after editor close). Works because both requires are runtime, inside functions — a load-time (top-of-file) require would deadlock the cycle. Code smell, not a layer violation. | Only if either require is ever hoisted to file top; break the `ui → markers` edge with the `LocalReviewChanged` event |
