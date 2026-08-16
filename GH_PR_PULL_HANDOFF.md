@@ -21,9 +21,11 @@ GitHub reviewer → LocalReviewGhPull → inline code comments → LocalReviewEx
    - `upsert_comment` refuses to update a remote comment → `nil, nil, "Remote comments are read-only"`
    - `remove_comment` refuses remote comments
    - `gh_pr.lua` submits only its own `get_submittable_comments()` filter (policy lives in gh_pr,
-     NOT in comment_store — mirrors `export.get_exportable_comments`)
-   - `export.lua` exports only local comments (for now — see Phase 5)
-   - `storage.remove_comments_for_path` / `remove_comments_by_ids` always keep remote comments
+     NOT in comment_store — mirrors export's local+remote composition policy)
+   - `export.lua` includes remote comments with attribution and URL; it never imports `comments.lua`
+     (it composes `storage` locals + `gh_session` remotes via `comment_store` rules)
+   - `storage` only ever persists local comments; legacy persisted remotes are filtered out on load
+     and during concurrent merge
 3. **Layered folders** — `domain/ application/ infrastructure/ presentation/` under `lua/local_review/`.
    See `ARCHITECTURE.md`. `./scripts/layers.sh` mechanically checks all forbidden edges; part of the gate.
 4. **Storage** — `save_scope` is atomic (temp + rename) and supports `remove_ids` tombstones so LWW
@@ -119,7 +121,7 @@ Command wiring in `init.lua`: resolve repo root via `context`, PR via existing `
 ## Phase 5 — UI + export
 
 - Separate highlight group (`LocalReviewGhMarker`), title `GitHub Review · @author`, `[outdated]` suffix
-- Export includes remote comments WITH attribution (change `get_exportable_comments` policy):
+- Export includes remote comments with attribution:
 
   ```text
   lua/example.lua:20 [github @reviewer]
