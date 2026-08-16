@@ -22,30 +22,20 @@ function M.comments_for_path(scope_root, target_path, kind)
   return comment_store.matching_path({ { data = M.load_scope(scope_root) } }, target_path, kind)
 end
 
----Keeps remote comments (read-only policy), persists the kept list and
----deletes the scope file when no comments remain.
+---Persists the kept list and deletes the scope file when no comments remain.
 ---@param scope_root string
 ---@param data table scope data with a comments array
 ---@param matched LocalReviewComment[]
 ---@param kept LocalReviewComment[]
 ---@return LocalReviewComment[]? removed, string? err
 local function apply_removal(scope_root, data, matched, kept)
-  local removable = {}
-  for _, comment in ipairs(matched) do
-    if comment_store.is_editable(comment) then
-      table.insert(removable, comment)
-    else
-      table.insert(kept, comment)
-    end
-  end
-
-  if #removable == 0 then
+  if #matched == 0 then
     return {}, nil
   end
 
   data.comments = kept
   local removed_ids = {}
-  for _, comment in ipairs(removable) do
+  for _, comment in ipairs(matched) do
     removed_ids[comment.id] = true
   end
 
@@ -61,7 +51,7 @@ local function apply_removal(scope_root, data, matched, kept)
       return nil, "Failed to delete the empty review scope."
     end
   end
-  return removable, nil
+  return matched, nil
 end
 
 ---@param scope_root string
