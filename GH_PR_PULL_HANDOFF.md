@@ -10,220 +10,114 @@ Primary workflow:
 GitHub reviewer → LocalReviewGhPull → inline code comments → LocalReviewExport → coding agent
 ```
 
-## Starting point
+## Current status (read this first)
 
-- Prerequisite PR #4 is merged (`fix/gh-review-and-split-editor`). Branch this feature from `main`.
+**Done — foundation is in place on `main`:**
 
-## MVP scope
+1. **Domain model** — `LocalReviewComment` has `origin ("local"|"github")` and `remote (ReviewMetadata?)`
+   fields in `comment_store.lua`. `ReviewMetadata`: repository, pull_number, thread_id, comment_id,
+   review_id?, author, url, commit_id?, resolved, outdated. (Generic name on purpose — provider-agnostic.)
+2. **Guards** — `comment_store.is_remote` / `is_editable` / `submittable` exist and are wired:
+   - `upsert_comment` refuses to update a remote comment → `nil, nil, "Remote comments are read-only"`
+   - `remove_comment` refuses remote comments
+   - `gh_pr.lua` submits only `submittable()` comments; post-submit cleanup uses ids of submitted ones
+   - `export.lua` exports only `get_exportable_comments()` (local only, for now — see Phase 5)
+   - `storage.remove_comments_for_path` / `remove_comments_by_ids` always keep remote comments
+3. **Layer refactor** — see `ARCHITECTURE.md`. Key facts: `storage` is the comment repository
+   (`comments_for_path`, `remove_*`), matching rules are pure functions in `comment_store`
+   (`matching_path`, `partition_path`, `partition_ids`), `comments.lua` is buffer workflows only.
+   Requires must point downward per the layer map.
+4. **No backfill** — single user, storage wiped fresh. Old-shape comments do not exist.
+   If that changes, reintroduce defaults-on-load in `storage.load_scope`.
 
-Add:
+**Test/gate setup:** `./scripts/test.sh` (busted), `./scripts/typecheck.sh` (lua-language-server),
+`stylua --check lua/ tests/`. All must pass before every commit. Mock only system boundaries
+(`vim.system`, `package.preload` of infra modules — see `tests/gh_pr_spec.lua` for the pattern).
 
-```vim
-:LocalReviewGhPull [path]
+## Next: Phase 3 — GraphQL adapter
+
+Create `lua/local_review/gh_pr_comments.lua` — vim-free except a thin `fetch`:
+
+```lua
+local M = {}
+
+M.QUERY = [[ ...const GraphQL string... ]]  -- reviewThreads: id, isResolved, isOutdated, path,
+                                            -- line/originalLine, startLine/originalStartLine,
+                                            -- diffSide, diffHunk; comments: id, databaseId, body,
+                                            -- author{login}, url, commit{oid}, pullRequestReview{id}
+
+---@param node table raw reviewThread node
+---@return string? err  -- nil when valid
+function M.validate(node) end
+
+---@param thread table raw reviewThread node
+---@param ctx { repository: string, pull_number: integer, scope_root: string }
+---@return LocalReviewComment[]
+function M.normalize(thread, ctx) end  -- one LocalReviewComment per comment node, origin = "github"
+
+---@param scope_root string
+---@param pr_info { number: integer }
+---@param callback fun(threads: table[]?, err: string?)
+function M.fetch(scope_root, pr_info, callback) end  -- vim.system({"gh","api","graphql",...}, {cwd=scope_root})
 ```
 
-The command should:
+TDD order:
 
-1. Resolve the Git repository from the optional path, using the same repository-root rules as GitHub submission.
-2. Resolve the PR associated with the current branch.
-3. Fetch unresolved inline review threads for that PR.
-4. Normalize each thread into an explicit remote-comment model.
-5. Synchronize by stable GitHub IDs without creating duplicates.
-6. Render fetched threads at their file and line/range.
-7. Clearly distinguish GitHub feedback from local draft comments.
-8. Mark comments as outdated/stale when they cannot safely map to the working tree.
-9. Make fetched feedback available to `LocalReviewExport` without allowing it to be submitted as a new GitHub review.
+1. Capture a real fixture: `gh api graphql -f query=... -F owner=abelfubu -F repo=local-review.nvim -F pr=4 > tests/fixtures/pr_threads.json`
+2. Tests for `normalize`/`validate` against the fixture (vim-free, plain busted)
+3. Implement `QUERY`, `validate`, `normalize`
+4. `fetch` last; mock `vim.system` in tests
 
-## Non-goals for the first PR
+Normalization decisions:
 
-- Replying to threads
-- Resolving threads
-- Editing or deleting GitHub comments
-- Automatic background polling
+- `absolute_path` = `scope_root .. "/" .. thread.path`
+- Anchors: `anchor.line_number = thread.originalLine`, `anchor.line_text` = last hunk line for
+  that line from `diffHunk` (strip leading `+`/context marker); ranges use originalStartLine/originalLine
+- `remote` table filled from thread + comment node; `resolved = thread.isResolved`, `outdated = thread.isOutdated`
+- `id` = `"gh:" .. comment_node.id` (stable, namespaced)
+
+## Phase 4 — Sync + `:LocalReviewGhPull [path]`
+
+Sync rules (upsert into storage):
+
+- Remote identity = `(repository, pull_number, thread_id, comment_id)`
+- Re-pulling upserts; bodies edited on GitHub update in place; never touch `origin == "local"` comments
+- Threads now resolved/absent → mark `remote.resolved`/`stale`, **never delete** during sync
+- Persist only after a complete successful fetch (atomic: temp file + rename)
+- Backoff on 403/429; no caching of fetch results
+- Remote comments are persisted in the same scope file as locals (same PR branch = same scope_root)
+
+Command wiring in `init.lua`: resolve repo root via `context`, PR via existing `gh_pr.lua` helpers
+(extract `get_pr_info` for reuse), call adapter `fetch`, merge into scope, `markers.refresh`.
+
+## Phase 5 — UI + export
+
+- Separate highlight group (`LocalReviewGhMarker`), title `GitHub Review · @author`, `[outdated]` suffix
+- Export includes remote comments WITH attribution (change `get_exportable_comments` policy):
+
+  ```text
+  lua/example.lua:20 [github @reviewer]
+     Please handle the nil case.
+     https://github.com/owner/repo/pull/123#discussion_r...
+  ```
+
+- Multiple threads on one line must stay distinct — investigate `find_comment_at_line` returning
+  only the first match; if it collapses threads, fix lookup before shipping
+- Optional: open-in-browser action for the comment URL (keep it small and read-only)
+
+## Non-goals (first PR)
+
+- Replying to / resolving / editing / deleting GitHub threads
+- Background polling
 - Importing general PR conversation or issue comments
 - Importing resolved threads by default
 
-Keep synchronization explicit and read-only.
-
-## Required domain boundary
-
-Fetched feedback must never be treated as a local review draft.
-
-Suggested model (named `ReviewMetadata`, provider-agnostic so GitLab/Azure can reuse it later; `origin` grows new values per provider):
-
-```lua
----@alias LocalReviewOrigin "local"|"github"
-
----@class ReviewMetadata
----@field repository string
----@field pull_number integer
----@field thread_id string
----@field comment_id string
----@field review_id string?
----@field author string
----@field url string
----@field commit_id string?
----@field resolved boolean
----@field outdated boolean
-```
-
-A persisted comment could carry:
-
-```lua
-origin = "github",
-remote = {
-  repository = "owner/repo",
-  pull_number = 123,
-  thread_id = "...",
-  comment_id = "...",
-  author = "reviewer",
-  url = "https://github.com/...",
-  resolved = false,
-  outdated = false,
-}
-```
-
-Before choosing this representation, inspect assumptions in:
-
-- `lua/local_review/comment_store.lua`
-- `lua/local_review/comments.lua`
-- `lua/local_review/ui.lua`
-- `lua/local_review/markers.lua`
-- `lua/local_review/export.lua`
-- `lua/local_review/gh_pr.lua`
-
-Important: local editing, deletion, and `LocalReviewGh` submission must filter out `origin == "github"`. A fetched comment must not be editable through the local draft editor or cleared as a submitted local draft.
-
-## API recommendation
-
-Prefer GitHub GraphQL because review threads and resolution state are first-class there. Use `gh api graphql` through argument arrays and `vim.system`, with `cwd` set to the resolved repository root.
-
-Fetch enough data to identify and render:
-
-- Repository and PR number
-- Thread ID
-- Resolution/outdated state (`isResolved`, `isOutdated`)
-- File path
-- Current/original line and range (`line`/`originalLine`, `startLine`/`originalStartLine`)
-- Diff side
-- Diff hunk (`diffHunk`) — this is the textual anchor; review comments carry no blob SHA
-- Comment ID, body, author, URL and commit/review identity
-
-Keep the GraphQL query as a single const string in the adapter module, and validate required fields at runtime, aborting with a clear error if any are missing (schema drift guard).
-
-Verify the live GraphQL schema before finalizing field names. Do not infer resolved state from the flat REST comments endpoint.
-
-Create a dedicated adapter, for example:
-
-```text
-lua/local_review/gh_pr_comments.lua
-```
-
-Keep API transport and normalization there. Keep rendering and persistence independent of raw GitHub response shapes.
-
-## Synchronization rules
-
-Use `(repository, pull_number, thread_id, comment_id)` as remote identity.
-
-On every explicit pull:
-
-1. Load the latest stored state.
-2. Upsert fetched remote comments by remote identity.
-3. Preserve all local comments.
-4. Preserve GitHub comments belonging to other PRs.
-5. Mark remote comments from this PR that are now resolved or absent from the fetch as resolved/stale. Never delete remote comments during sync — an unresolved-only query cannot distinguish resolved from deleted or moved-off-diff. An explicit purge command may be added later.
-6. Never overwrite local comment bodies. Remote comment bodies edited on GitHub should be updated in place.
-7. Persist only after a complete successful fetch; API failure must leave existing state unchanged. Write to a temp file and atomically rename (`storage.lua` currently does a plain `writefile`).
-8. On HTTP 403/429 or rate-limit errors, retry with exponential backoff and surface a clear error. Do not cache fetch results — caching would make freshly resolved threads appear unresolved.
-9. Namespace persisted remote comments by `(repository, pull_number)` so preserving other PRs' comments is structural, not just a filter.
-
-Avoid path-wide clearing. Concurrently created local comments must survive synchronization.
-
-## Positioning and stale behavior
-
-GitHub line numbers refer to a PR commit/diff, not necessarily the current working tree.
-
-Safe mapping order:
-
-1. Use GitHub path and current line/range when they match the checked-out PR head.
-2. Capture the `diffHunk` and original line/range as anchors.
-3. Reuse the existing dual-anchor resolver (`comment_store.reconcile_dual_anchor_comment`) to reconcile against the working tree.
-4. Trust GitHub's `isOutdated` flag rather than recomputing drift. If mapping is additionally ambiguous or missing locally, mark the remote comment stale.
-5. Never silently guess a different line.
-
-Display stale/outdated GitHub feedback, but make the state obvious.
-
-## UI guidance
-
-Suggested title:
-
-```text
-GitHub Review · @author
-```
-
-Suggested distinctions:
-
-- Separate highlight/sign group from `LocalReviewMarker`
-- Include `[outdated]` or `[stale]` in the title
-- Include a GitHub URL in list/export output
-- Add an action to open the URL in the browser only if it remains small and read-only
-
-Investigate multiple local/remote threads on the same line. The current lookup/rendering model may assume one editable comment covers a line; do not silently collapse threads.
-
-## Export format
-
-Remote feedback should be agent-readable and clearly attributed, for example:
-
-```text
-lua/example.lua:20 [github @reviewer]
-   Please handle the nil case.
-   https://github.com/owner/repo/pull/123#discussion_r...
-```
-
-Exporting must not delete remote comments. Existing local export/delete semantics must remain unchanged unless explicitly requested.
-
-## Tests
-
-Use TDD through public seams. Suggested behavioral coverage:
-
-1. Cancelled/failed GitHub fetch leaves stored comments unchanged.
-2. Explicit path runs GitHub commands in that repository.
-3. Only unresolved threads are imported.
-4. Repeated pulls do not duplicate threads/comments.
-5. A resolved/removed remote thread follows the documented sync policy.
-6. Local comments survive remote synchronization.
-7. Remote comments cannot be submitted by `LocalReviewGh`.
-8. Remote comments cannot be edited/deleted as local drafts.
-9. Remote comments are not cleared by local submission/export cleanup.
-10. Outdated or unmappable comments are marked, not guessed onto a line.
-11. Multiple threads on one line remain distinct.
-12. Export identifies GitHub origin, author and URL.
-
-Mock only system boundaries (`gh` process/API). Avoid tests coupled to private helper functions.
-
-Run:
-
-```bash
-./scripts/test.sh
-./scripts/typecheck.sh
-stylua --check lua/ tests/
-```
-
-Add a headless Neovim smoke test if marker/UI behavior cannot be covered by Busted.
-
 ## Acceptance criteria
 
-- `:LocalReviewGhPull` fetches and displays unresolved inline PR feedback.
-- Re-running it is idempotent.
-- Repository and PR identity are explicit and correct.
-- Local comments remain editable and safe.
-- GitHub comments remain read-only.
-- `LocalReviewGh` never resubmits imported feedback.
-- Failed synchronization causes no local data loss.
-- Ambiguous positions are stale/outdated rather than guessed.
-- Exported feedback is useful to a coding agent.
-- Tests, typecheck and formatting pass.
-
-## Delivery guidance
-
-Keep the first PR narrow. If supporting multiple comments per line requires a substantial storage/rendering redesign, split that foundation into its own PR before adding GitHub synchronization.
+- `:LocalReviewGhPull` fetches and displays unresolved inline PR feedback
+- Re-running is idempotent
+- Local comments remain editable and safe; GitHub comments stay read-only
+- `LocalReviewGh` never resubmits imported feedback
+- Failed sync causes no local data loss
+- Ambiguous positions are stale/outdated, never guessed
+- Exported feedback is agent-useful; tests + typecheck + stylua pass
