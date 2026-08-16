@@ -334,6 +334,39 @@ describe("storage", function()
     assert.are.equal(0, #second.comments)
   end)
 
+  it("invalidates the cache via vim.uv.fs_stat mtime changes (primary path)", function()
+    local path = module.scope_file("/repo")
+    local uv_mtimes = {}
+    _G.vim.uv = {
+      fs_stat = function(p)
+        local mt = uv_mtimes[p]
+        return mt and { mtime = mt } or nil
+      end,
+    }
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        { id = "local-1", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } },
+      },
+    })
+    readable_files[path] = true
+    uv_mtimes[path] = { sec = 100, nsec = 5 }
+
+    local first = module.load_scope("/repo")
+    assert.are.equal("local-1", first.comments[1].id)
+
+    -- External writer changes content with an nsec-only bump: invisible to the
+    -- getftime fallback (second resolution), so this exercises the fs_stat path.
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        { id = "local-2", origin = "local", absolute_path = "/repo/a.lua", anchor = { line_number = 1 } },
+      },
+    })
+    uv_mtimes[path] = { sec = 100, nsec = 6 }
+
+    local second = module.load_scope("/repo")
+    assert.are.equal("local-2", second.comments[1].id)
+  end)
+
   it("save_scope merge still reads disk directly and does not use the cache", function()
     local path = module.scope_file("/repo")
     file_contents[path] = require("dkjson").encode({
