@@ -145,7 +145,12 @@ local function merge_comments(save_comments, disk_comments)
   local by_id = {}
 
   for _, comment in ipairs(disk_comments or {}) do
-    if type(comment) == "table" and type(comment.id) == "string" and comment.id ~= "" then
+    if
+      type(comment) == "table"
+      and type(comment.id) == "string"
+      and comment.id ~= ""
+      and comment.origin ~= "github"
+    then
       by_id[comment.id] = comment
     end
   end
