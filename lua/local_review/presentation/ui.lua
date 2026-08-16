@@ -20,10 +20,13 @@ local state = {
   initial_body = "",
   reserved_height = 0,
   closing = false,
-  viewer_bufnr = nil,
-  viewer_winid = nil,
-  viewer_source_winid = nil,
-  viewer_group = nil,
+}
+
+local hover_state = {
+  bufnr = nil,
+  winid = nil,
+  source_winid = nil,
+  group = nil,
 }
 
 local function is_valid_buffer(bufnr)
@@ -35,8 +38,7 @@ local function is_valid_window(winid)
 end
 
 local function is_open()
-  return (is_valid_buffer(state.editor_bufnr) and is_valid_window(state.editor_winid))
-    or (is_valid_buffer(state.viewer_bufnr) and is_valid_window(state.viewer_winid))
+  return is_valid_buffer(state.editor_bufnr) and is_valid_window(state.editor_winid)
 end
 
 local function body_lines(body)
@@ -112,28 +114,28 @@ local function cleanup()
   state.closing = false
 end
 
-local function close_viewer()
-  local source_winid = state.viewer_source_winid
-  if is_valid_window(state.viewer_winid) then
-    pcall(vim.api.nvim_win_close, state.viewer_winid, true)
-  end
-  if is_valid_window(source_winid) then
-    pcall(vim.api.nvim_set_current_win, source_winid)
-  end
-  if state.viewer_group then
-    pcall(vim.api.nvim_del_augroup_by_id, state.viewer_group)
-  end
-  state.viewer_bufnr = nil
-  state.viewer_winid = nil
-  state.viewer_source_winid = nil
-  state.viewer_group = nil
-end
-
 local function close_window()
   if is_valid_window(state.editor_winid) then
     pcall(vim.api.nvim_win_close, state.editor_winid, true)
   end
   cleanup()
+end
+
+local function close_hover()
+  local source_winid = hover_state.source_winid
+  if is_valid_window(hover_state.winid) then
+    pcall(vim.api.nvim_win_close, hover_state.winid, true)
+  end
+  if hover_state.group then
+    pcall(vim.api.nvim_del_augroup_by_id, hover_state.group)
+  end
+  if is_valid_window(source_winid) and vim.api.nvim_get_current_win() == hover_state.winid then
+    pcall(vim.api.nvim_set_current_win, source_winid)
+  end
+  hover_state.bufnr = nil
+  hover_state.winid = nil
+  hover_state.source_winid = nil
+  hover_state.group = nil
 end
 
 local function persist(opts)
@@ -168,11 +170,6 @@ local function persist(opts)
 end
 
 function M.close_active()
-  if is_valid_buffer(state.viewer_bufnr) and is_valid_window(state.viewer_winid) then
-    close_viewer()
-    return true
-  end
-
   if not is_valid_buffer(state.editor_bufnr) or not is_valid_window(state.editor_winid) then
     cleanup()
     return true
@@ -239,57 +236,73 @@ local function inline_dimensions(lines, source_winid, anchor_row)
   }
 end
 
-function M.open_remote_viewer(source_bufnr, source_winid, line)
-  if not M.close_active() then
-    return
-  end
-
-  local line_state = comments.get_line_state(source_bufnr, line)
-  if not line_state or not line_state.ctx then
-    return
-  end
-
-  local all_comments = comments.comments_for_buffer(source_bufnr, { silent = true })
-  local matches = comment_store.comments_at_line(all_comments, line_state.ctx.absolute_path, line)
-  local remote_comments = {}
-  for _, comment in ipairs(matches) do
-    if comment_store.is_remote(comment) then
-      remote_comments[#remote_comments + 1] = comment
-    end
-  end
-
-  if #remote_comments == 0 then
-    return
-  end
-
-  local viewer_lines = {}
-  for index, comment in ipairs(remote_comments) do
-    local author = comment.remote and comment.remote.author or "unknown"
+local function hover_lines(comments_list)
+  local lines = {}
+  for index, comment in ipairs(comments_list) do
     local meta = {}
-    if comment.remote and comment.remote.resolved then
-      table.insert(meta, "resolved")
-    end
-    if comment.remote and comment.remote.outdated then
-      table.insert(meta, "outdated")
-    end
     if comment.stale then
       table.insert(meta, "stale")
     end
 
-    table.insert(viewer_lines, string.format("### @%s", author))
+    if comment_store.is_remote(comment) then
+      if comment.remote and comment.remote.resolved then
+        table.insert(meta, "resolved")
+      end
+      if comment.remote and comment.remote.outdated then
+        table.insert(meta, "outdated")
+      end
+      local author = comment.remote and comment.remote.author or "unknown"
+      table.insert(lines, string.format("### @%s", author))
+    else
+      table.insert(lines, "### Review Comment")
+    end
+
     if #meta > 0 then
-      table.insert(viewer_lines, string.format("_(%s)_", table.concat(meta, ", ")))
+      table.insert(lines, string.format("_(%s)_", table.concat(meta, ", ")))
     end
 
     for _, body_line in ipairs(vim.split(comment.body or "", "\n", { plain = true })) do
-      table.insert(viewer_lines, body_line)
+      table.insert(lines, body_line)
     end
 
-    if index < #remote_comments then
-      table.insert(viewer_lines, "---")
-      table.insert(viewer_lines, "")
+    if index < #comments_list then
+      table.insert(lines, "---")
+      table.insert(lines, "")
     end
   end
+  return lines
+end
+
+function M.hover_peek(source_bufnr, source_winid, line)
+  if is_valid_window(hover_state.winid) then
+    if vim.api.nvim_get_current_win() ~= hover_state.winid then
+      -- Second K: focus the hover and stop auto-closing.
+      if hover_state.group then
+        pcall(vim.api.nvim_del_augroup_by_id, hover_state.group)
+        hover_state.group = nil
+      end
+      pcall(vim.api.nvim_set_current_win, hover_state.winid)
+      return true
+    end
+    -- Already focused: close.
+    close_hover()
+    return true
+  end
+
+  close_hover()
+
+  local line_state = comments.get_line_state(source_bufnr, line)
+  if not line_state or not line_state.ctx then
+    return false
+  end
+
+  local all_comments = comments.comments_for_buffer(source_bufnr, { silent = true })
+  local matches = comment_store.comments_at_line(all_comments, line_state.ctx.absolute_path, line)
+  if #matches == 0 then
+    return false
+  end
+
+  local h_lines = hover_lines(matches)
 
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.bo[bufnr].buftype = "nofile"
@@ -298,19 +311,19 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
   vim.bo[bufnr].filetype = "markdown"
   vim.api.nvim_buf_set_name(
     bufnr,
-    string.format("local-review://github-comment/%s:%d", line_state.ctx.absolute_path, line)
+    string.format("local-review://hover-comment/%s:%d", line_state.ctx.absolute_path, line)
   )
-  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, viewer_lines)
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, h_lines)
   vim.bo[bufnr].modifiable = false
 
   local size = inline_dimensions({ " " }, source_winid, nil)
-  local max_height = math.floor(vim.o.lines * 0.6)
-  local height = math.min(math.max(6, #viewer_lines), max_height)
+  local max_height = math.floor(vim.o.lines * 0.5)
+  local height = math.min(math.max(6, #h_lines), max_height)
   local anchor_row = vim.api.nvim_win_call(source_winid, function()
     return vim.fn.winline()
   end)
 
-  local winid = vim.api.nvim_open_win(bufnr, true, {
+  local winid = vim.api.nvim_open_win(bufnr, false, {
     relative = "win",
     win = source_winid,
     row = anchor_row,
@@ -319,14 +332,15 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
     height = height,
     style = "minimal",
     border = { "┌", "─", "┐", "│", "┘", "─", "└", "│" },
-    title = " GitHub Review ",
+    title = " Review ",
     title_pos = "left",
+    focusable = false,
     noautocmd = true,
   })
 
-  state.viewer_bufnr = bufnr
-  state.viewer_winid = winid
-  state.viewer_source_winid = source_winid
+  hover_state.bufnr = bufnr
+  hover_state.winid = winid
+  hover_state.source_winid = source_winid
 
   vim.wo[winid].wrap = true
   vim.wo[winid].linebreak = true
@@ -351,33 +365,30 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
   local opts = require("local_review").get_opts()
   for _, keymap in ipairs(opts.comment_close_keys or {}) do
     map(keymap.modes, keymap.key, function()
-      close_viewer()
-    end, "Local Review: Close viewer")
+      close_hover()
+    end, "Local Review: Close hover")
   end
   map("n", "<Esc>", function()
-    close_viewer()
-  end, "Local Review: Close viewer")
+    close_hover()
+  end, "Local Review: Close hover")
 
-  local group = vim.api.nvim_create_augroup("local-review-viewer-" .. bufnr, { clear = true })
-  state.viewer_group = group
-  vim.api.nvim_create_autocmd("WinClosed", {
+  local hover_key = opts.keymaps and opts.keymaps.hover
+  map("n", hover_key, function()
+    close_hover()
+  end, "Local Review: Close hover")
+
+  local group = vim.api.nvim_create_augroup("local-review-hover-" .. bufnr, { clear = true })
+  hover_state.group = group
+  vim.api.nvim_create_autocmd({ "CursorMoved", "InsertEnter", "BufLeave" }, {
     group = group,
-    buffer = bufnr,
-    callback = function(event)
-      if tonumber(event.match) ~= winid then
-        return
-      end
-      state.viewer_bufnr = nil
-      state.viewer_winid = nil
-      state.viewer_source_winid = nil
-      if state.viewer_group then
-        pcall(vim.api.nvim_del_augroup_by_id, state.viewer_group)
-        state.viewer_group = nil
-      end
+    buffer = source_bufnr,
+    once = true,
+    callback = function()
+      close_hover()
     end,
   })
 
-  pcall(vim.api.nvim_win_set_cursor, winid, { 1, 0 })
+  return true
 end
 
 local function reserve_inline_space(bufnr, line, height)
@@ -539,9 +550,24 @@ function M.open_current_line(range)
     return
   end
 
-  if line_state.comment and comment_store.is_remote(line_state.comment) then
-    M.open_remote_viewer(source_bufnr, source_winid, start_line)
+  local all_comments = comments.comments_for_buffer(source_bufnr, { silent = true })
+  local matches = comment_store.comments_at_line(all_comments, line_state.ctx.absolute_path, start_line)
+
+  local local_comment = nil
+  for _, comment in ipairs(matches) do
+    if not comment_store.is_remote(comment) then
+      local_comment = comment
+      break
+    end
+  end
+
+  if not local_comment and #matches > 0 then
+    vim.notify("GitHub comments are read-only — press K to view", vim.log.levels.INFO)
     return
+  end
+
+  if local_comment then
+    line_state.comment = local_comment
   end
 
   -- Editing an existing comment always covers its full stored range.

@@ -6,7 +6,9 @@ local defaults = {
   stale_marker_hl = "LocalReviewStaleMarker",
   gh_marker_hl = "LocalReviewGhMarker",
   storage_dir = vim.fs.joinpath(vim.fn.stdpath("state"), "local-review"),
-  keymaps = {},
+  keymaps = {
+    hover = "K",
+  },
   comment_close_keys = {
     { modes = { "n" }, key = "q" },
     { modes = { "n", "i" }, key = "<C-c>" },
@@ -23,7 +25,7 @@ local function command(name, rhs, opts)
 end
 
 local function map(mode, lhs, rhs, desc)
-  if lhs == nil or lhs == "" then
+  if lhs == nil or lhs == "" or lhs == false then
     return
   end
 
@@ -184,6 +186,62 @@ function M.setup(opts)
     state.configured = true
   end
 
+  local hover_key = state.opts.keymaps.hover
+  local hover_fallback = nil
+  if hover_key and hover_key ~= "" then
+    hover_fallback = vim.fn.maparg(hover_key, "n", false, true)
+    if
+      hover_fallback == "" or (type(hover_fallback) == "table" and not (hover_fallback.rhs or hover_fallback.callback))
+    then
+      hover_fallback = nil
+    end
+  end
+
+  local function hover_or_fallback()
+    local source_bufnr = vim.api.nvim_get_current_buf()
+    local source_winid = vim.api.nvim_get_current_win()
+    local line = vim.api.nvim_win_get_cursor(source_winid)[1]
+    if require("local_review.presentation.ui").hover_peek(source_bufnr, source_winid, line) then
+      return
+    end
+
+    if hover_fallback then
+      if hover_fallback.callback then
+        if hover_fallback.expr == 1 then
+          local ok, result = pcall(hover_fallback.callback)
+          if ok and result then
+            local keys = vim.api.nvim_replace_termcodes(tostring(result), true, false, true)
+            vim.api.nvim_feedkeys(keys, "m", false)
+          end
+        else
+          hover_fallback.callback()
+        end
+      elseif hover_fallback.expr == 1 and hover_fallback.rhs then
+        local ok, result = pcall(vim.api.nvim_eval, hover_fallback.rhs)
+        if ok and result then
+          local keys = vim.api.nvim_replace_termcodes(tostring(result), true, false, true)
+          vim.api.nvim_feedkeys(keys, "m", false)
+        end
+      elseif hover_fallback.rhs then
+        local keys = vim.api.nvim_replace_termcodes(hover_fallback.rhs, true, true, true)
+        vim.api.nvim_feedkeys(keys, "m", false)
+      end
+    elseif vim.lsp and vim.lsp.buf and vim.lsp.buf.hover then
+      local clients = vim.lsp.get_clients({ bufnr = source_bufnr, method = "textDocument/hover" })
+      if #clients > 0 then
+        vim.lsp.buf.hover()
+      else
+        pcall(function()
+          vim.cmd("normal! K")
+        end)
+      end
+    else
+      pcall(function()
+        vim.cmd("normal! K")
+      end)
+    end
+  end
+
   map({ "n", "x" }, state.opts.keymaps.comment, visual_safe_cmd("LocalReviewComment"), "Local Review: Comment")
   map({ "n", "x" }, state.opts.keymaps.delete, visual_safe_cmd("LocalReviewDelete"), "Local Review: Delete")
   map({ "n", "x" }, state.opts.keymaps.next, visual_safe_cmd("LocalReviewNext"), "Local Review: Next")
@@ -191,6 +249,7 @@ function M.setup(opts)
   map({ "n", "x" }, state.opts.keymaps.export, visual_safe_cmd("LocalReviewExport"), "Local Review: Export")
   map({ "n", "x" }, state.opts.keymaps.github_review, visual_safe_cmd("LocalReviewGh"), "Local Review: Github Review")
   map({ "n", "x" }, state.opts.keymaps.list, visual_safe_cmd("LocalReviewList"), "Local Review: List")
+  map("n", state.opts.keymaps.hover, hover_or_fallback, "Local Review: Hover")
 end
 
 function M.get_opts()

@@ -40,6 +40,7 @@ Use your preferred plugin manager. Example with `lazy.nvim`:
       prev = "[r",
       export = "<leader>re",
       list = "<leader>rl",
+      hover = "K", -- press K on a commented line to peek the comment
     },
     comment_close_keys = {
       { modes = { "n" }, key = "q" },
@@ -50,6 +51,7 @@ Use your preferred plugin manager. Example with `lazy.nvim`:
 ```
 
 See `:h local-review` for the full reference.
+Set any keymap to `false` to disable it (e.g. `hover = false`).
 
 ### Skill
 
