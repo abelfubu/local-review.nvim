@@ -173,6 +173,10 @@ function M.setup(opts)
     vim.api.nvim_create_autocmd({ "BufEnter", "BufReadPost", "BufWritePost", "FileChangedShellPost", "VimResized" }, {
       group = vim.api.nvim_create_augroup("local-review-refresh", { clear = true }),
       callback = function(event)
+        -- External file changes could invalidate our in-memory scope cache.
+        if event.event == "FileChangedShellPost" then
+          require("local_review.infrastructure.storage").invalidate_scope_cache()
+        end
         refresh_current_buffer(event.buf)
       end,
     })
@@ -181,7 +185,10 @@ function M.setup(opts)
       group = vim.api.nvim_create_augroup("local-review-changed", { clear = true }),
       pattern = "LocalReviewChanged",
       callback = function(event)
+        -- Application-layer mutations may have changed persisted state; drop
+        -- the cached scope so the next load picks up the new canonical data.
         if event.data and event.data.scope_root then
+          require("local_review.infrastructure.storage").invalidate_scope_cache(event.data.scope_root)
           require("local_review.presentation.markers").refresh_scope(event.data.scope_root)
         end
       end,
