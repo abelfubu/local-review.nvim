@@ -7,6 +7,8 @@ local comment_store = require("local_review.domain.comment_store")
 
 local state = {
   file_fingerprints = {},
+  line_selection = {},
+  jump_cursor = nil,
 }
 
 local function now()
@@ -123,6 +125,33 @@ local function upsert_comment(scope_state, ctx, line, body, line_end)
   })
 end
 
+local function find_comment_index_by_id(comments, id)
+  for index, comment in ipairs(comments) do
+    if comment.id == id then
+      return index
+    end
+  end
+  return nil
+end
+
+local function select_comment_at_line(comments, absolute_path, bufnr, line)
+  local matches = comment_store.comments_at_line(comments, absolute_path, line)
+  if #matches == 0 then
+    return nil, nil
+  end
+
+  local selection = state.line_selection[bufnr]
+  local index = 1
+  if selection and selection.path == absolute_path and selection.line == line then
+    index = (selection.index % #matches) + 1
+  end
+  state.line_selection[bufnr] = { path = absolute_path, line = line, index = index }
+
+  local comment = matches[index]
+  local original_index = find_comment_index_by_id(comments, comment.id)
+  return comment, original_index
+end
+
 local function find_current_comment()
   local resolved, err = scope_state_for_buffer(0)
   if not resolved then
@@ -131,8 +160,7 @@ local function find_current_comment()
   end
 
   local line = current_line()
-  local comment, index =
-    comment_store.find_comment_entry_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, line)
+  local comment, index = select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, 0, line)
   return {
     ---@type LocalReviewComment?
     comment = comment,
@@ -149,7 +177,7 @@ local function find_line_comment(bufnr, line)
   end
 
   local comment, index =
-    comment_store.find_comment_entry_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, line)
+    select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, bufnr, line)
   return {
     ---@type LocalReviewComment?
     comment = comment,
@@ -252,14 +280,42 @@ function M.set_line_comment(bufnr, line, body, range)
     line_end = math.max(range.start_line, range.end_line)
   end
 
+  if line_state.comment then
+    if comment_store.is_remote(line_state.comment) then
+      return nil, "Remote comments are read-only"
+    end
+
+    local lines = buffer_lines(line_state.ctx.bufnr)
+    local resolved_line = comment_store.clamp_line(anchor_line, lines)
+    local resolved_end = comment_store.clamp_line(math.max(anchor_line, line_end or anchor_line), lines)
+
+    line_state.comment.body = trimmed
+    line_state.comment.updated_at = now()
+    line_state.comment.absolute_path = line_state.ctx.absolute_path
+    line_state.comment.relative_path = line_state.ctx.relative_path
+    comment_store.apply_anchor(line_state.comment, positioning.capture, lines, resolved_line)
+    line_state.comment.line_end = resolved_end
+    if resolved_end > resolved_line then
+      comment_store.apply_anchor_end(line_state.comment, positioning.capture, lines, resolved_end)
+    else
+      line_state.comment.anchor_end = nil
+    end
+
+    local ok, persist_err = persist_scope_state(line_state.ctx.scope_root, line_state.scope_state.data)
+    if not ok then
+      return nil, persist_err
+    end
+    return "updated"
+  end
+
   local _, updated, reason = upsert_comment(line_state.scope_state, line_state.ctx, anchor_line, trimmed, line_end)
   if reason then
     return nil, reason
   end
 
-  local ok, err = persist_scope_state(line_state.ctx.scope_root, line_state.scope_state.data)
+  local ok, persist_err = persist_scope_state(line_state.ctx.scope_root, line_state.scope_state.data)
   if not ok then
-    return nil, err
+    return nil, persist_err
   end
   return updated and "updated" or "created"
 end
@@ -320,29 +376,58 @@ function M.jump(direction)
     return
   end
 
-  local line = current_line()
-  table.sort(comments, function(a, b)
-    return a.anchor.line_number < b.anchor.line_number
-  end)
+  table.sort(comments, comment_store.comment_sorter)
 
-  local target
-  if direction > 0 then
-    for _, comment in ipairs(comments) do
-      if comment.anchor.line_number > line then
-        target = comment
+  local line = current_line()
+  local cursor_index = nil
+
+  if state.jump_cursor and state.jump_cursor.comment_id then
+    for index, comment in ipairs(comments) do
+      if comment.id == state.jump_cursor.comment_id then
+        cursor_index = index
         break
       end
     end
-    target = target or comments[1]
-  else
-    for index = #comments, 1, -1 do
-      if comments[index].anchor.line_number < line then
-        target = comments[index]
-        break
-      end
-    end
-    target = target or comments[#comments]
   end
+
+  if cursor_index == nil then
+    for index, comment in ipairs(comments) do
+      if comment.anchor.line_number == line then
+        cursor_index = index
+        break
+      end
+    end
+  end
+
+  if cursor_index == nil then
+    if direction > 0 then
+      for index, comment in ipairs(comments) do
+        if comment.anchor.line_number > line then
+          cursor_index = index
+          break
+        end
+      end
+      cursor_index = cursor_index or 1
+    else
+      for index = #comments, 1, -1 do
+        if comments[index].anchor.line_number < line then
+          cursor_index = index
+          break
+        end
+      end
+      cursor_index = cursor_index or #comments
+    end
+  end
+
+  local target_index = cursor_index + direction
+  if target_index > #comments then
+    target_index = 1
+  elseif target_index < 1 then
+    target_index = #comments
+  end
+
+  local target = comments[target_index]
+  state.jump_cursor = { comment_id = target.id }
 
   local max_line = math.max(vim.api.nvim_buf_line_count(0), 1)
   local target_line = math.max(1, math.min(target.anchor.line_number, max_line))

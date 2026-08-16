@@ -1,5 +1,7 @@
 local M = {}
 
+local comment_store = require("local_review.domain.comment_store")
+
 local namespace = vim.api.nvim_create_namespace("local-review-markers")
 
 local function marker_opts()
@@ -94,7 +96,16 @@ local function comment_virt_lines(comment, width)
   local last = math.max(first, comment.line_end or first)
   local range = last > first and string.format(" %d-%d", first, last) or ""
   local stale = comment.stale and " [stale]" or ""
-  local title = string.format(" Review Comment%s%s ", range, stale)
+  local title
+
+  if comment_store.is_remote(comment) then
+    local author = comment.remote and comment.remote.author or "unknown"
+    local outdated = comment.remote and comment.remote.outdated and " [outdated]" or ""
+    title = string.format(" GitHub Review · @%s%s%s ", author, range, outdated)
+  else
+    title = string.format(" Review Comment%s%s ", range, stale)
+  end
+
   local top = border_top(title, width)
   local bottom = border_bottom(width)
 
@@ -149,7 +160,8 @@ function M.refresh(bufnr)
     for line = first, last do
       local mark = {
         sign_text = opts.marker_text,
-        sign_hl_group = comment.stale and opts.stale_marker_hl or opts.marker_hl,
+        sign_hl_group = comment.stale and opts.stale_marker_hl
+          or (comment_store.is_remote(comment) and opts.gh_marker_hl or opts.marker_hl),
         priority = 10 + index,
       }
       if line == last and not active and width then

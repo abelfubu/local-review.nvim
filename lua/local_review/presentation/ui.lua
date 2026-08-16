@@ -1,6 +1,7 @@
 local M = {}
 
 local comments = require("local_review.application.comments")
+local comment_store = require("local_review.domain.comment_store")
 
 local namespace = vim.api.nvim_create_namespace("local-review-ui")
 local placeholder_namespace = vim.api.nvim_create_namespace("local-review-ui-placeholder")
@@ -367,6 +368,11 @@ function M.open_current_line(range)
 
   local line_state = comments.get_line_state(source_bufnr, start_line)
   if not line_state then
+    return
+  end
+
+  if line_state.comment and comment_store.is_remote(line_state.comment) then
+    vim.notify("Remote GitHub comments are read-only.", vim.log.levels.INFO)
     return
   end
 

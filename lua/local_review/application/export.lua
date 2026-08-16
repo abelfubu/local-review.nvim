@@ -15,15 +15,9 @@ local function display_path(root_path, kind, absolute_path)
 end
 
 local function get_exportable_comments(path_comments)
-  local result = {}
-
-  for _, comment in ipairs(path_comments) do
-    if store.is_editable(comment) then
-      table.insert(result, comment)
-    end
-  end
-
-  return result
+  -- Export includes both local and remote (GitHub) comments. Remote comments
+  -- are rendered with attribution and a URL below the body.
+  return path_comments
 end
 
 ---@param path string?
@@ -70,14 +64,27 @@ local function export_lines(path)
     if (comment.line_end or comment.anchor.line_number) > comment.anchor.line_number then
       line_ref = string.format("%d-%d", comment.anchor.line_number, comment.line_end)
     end
-    lines[#lines + 1] = string.format(
+
+    local location = string.format(
       "%d. %s:%s%s",
       index,
       display_path(target.path, target.kind, comment.absolute_path),
       line_ref,
       stale_suffix
     )
+
+    if store.is_remote(comment) then
+      local author = comment.remote and comment.remote.author or "unknown"
+      location = location .. string.format(" [github @%s]", author)
+    end
+
+    lines[#lines + 1] = location
     lines[#lines + 1] = export_indent .. comment.body:gsub("\n", "\n" .. export_indent)
+
+    if store.is_remote(comment) and comment.remote and comment.remote.url then
+      lines[#lines + 1] = export_indent .. comment.remote.url
+    end
+
     lines[#lines + 1] = ""
   end
 
