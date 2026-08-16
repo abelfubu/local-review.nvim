@@ -150,6 +150,7 @@ local hover_bufnr = vim.api.nvim_win_get_buf(hover_winid)
 assert(vim.bo[hover_bufnr].filetype == "markdown", "hover buffer is not markdown filetype")
 assert(not vim.bo[hover_bufnr].modifiable, "hover buffer is modifiable")
 assert(vim.api.nvim_get_current_win() == source_winid, "hover should not be focused initially")
+assert(vim.api.nvim_win_get_config(hover_winid).focusable == false, "hover window should not be focusable initially")
 
 local hover_lines = vim.api.nvim_buf_get_lines(hover_bufnr, 0, -1, false)
 local found_local_header = false

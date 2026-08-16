@@ -152,6 +152,45 @@ for index, virt_line in ipairs(virt_lines) do
   end
 end
 
+-- Tab-containing body: a tab's display width depends on the starting column.
+-- The body text starts after "│ " (column 2), so verify it fits the inner
+-- width when measured from that column.
+vim.api.nvim_buf_clear_namespace(source_bufnr, namespace, 0, -1)
+local tab_comment = vim.deepcopy(long_comment)
+tab_comment.id = "local:tab"
+tab_comment.body = "\tfirst\tsecond\tthird"
+vim.fn.writefile({ vim.json.encode({ scope_root = scope_root, comments = { tab_comment } }) }, scope_file)
+
+require("local_review.presentation.markers").refresh(source_bufnr)
+extmarks = vim.api.nvim_buf_get_extmarks(source_bufnr, namespace, { 0, 0 }, { -1, -1 }, { details = true })
+virt_lines = nil
+for _, extmark in ipairs(extmarks) do
+  if extmark[4] and extmark[4].virt_lines then
+    virt_lines = extmark[4].virt_lines
+    break
+  end
+end
+assert(virt_lines, "tab marker extmark has no virt_lines")
+
+for index, virt_line in ipairs(virt_lines) do
+  local is_border = index == 1 or index == #virt_lines
+  if not is_border then
+    local line_text = ""
+    for _, chunk in ipairs(virt_line) do
+      line_text = line_text .. (chunk[1] or "")
+    end
+    local line_width = vim.fn.strdisplaywidth(line_text)
+    assert(
+      line_width == box_width,
+      string.format("tab line %d width %d ~= %d: %q", index, line_width, box_width, line_text)
+    )
+
+    local body_chunk = virt_line[2] and virt_line[2][1] or ""
+    local body_width = vim.fn.strdisplaywidth(body_chunk, 2)
+    assert(body_width <= inner, string.format("tab line %d body width %d > inner %d", index, body_width, inner))
+  end
+end
+
 vim.fn.delete(storage_dir, "rf")
 vim.fn.delete(source_path)
 print("PASS: inline markers truncate long bodies and keep short bodies intact")

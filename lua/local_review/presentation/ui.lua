@@ -334,7 +334,7 @@ function M.hover_peek(source_bufnr, source_winid, line)
     border = { "┌", "─", "┐", "│", "┘", "─", "└", "│" },
     title = " Review ",
     title_pos = "left",
-    focusable = true,
+    focusable = false,
     noautocmd = true,
   })
 

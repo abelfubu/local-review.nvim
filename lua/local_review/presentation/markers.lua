@@ -28,7 +28,8 @@ local function box_width(bufnr)
   return math.max(8, win_width - textoff)
 end
 
-local function split_at_display_width(text, width)
+local function split_at_display_width(text, width, start_col)
+  start_col = start_col or 0
   if width <= 0 then
     return "", text
   end
@@ -42,7 +43,7 @@ local function split_at_display_width(text, width)
   while low < high do
     local mid = math.ceil((low + high) / 2)
     local part = vim.fn.strcharpart(text, 0, mid)
-    if vim.fn.strdisplaywidth(part) <= width then
+    if vim.fn.strdisplaywidth(part, start_col) <= width then
       low = mid
     else
       high = mid - 1
@@ -54,14 +55,15 @@ local function split_at_display_width(text, width)
   return prefix, rest
 end
 
-local function wrap_line(text, width)
+local function wrap_line(text, width, start_col)
+  start_col = start_col or 0
   if width <= 0 then
     return {}
   end
 
   local lines = {}
   while text ~= "" do
-    local part, rest = split_at_display_width(text, width)
+    local part, rest = split_at_display_width(text, width, start_col)
     if part == "" then
       -- Even one character exceeds the budget; take it anyway to avoid looping.
       part = vim.fn.strcharpart(text, 0, 1)
@@ -73,13 +75,14 @@ local function wrap_line(text, width)
   return lines
 end
 
-local function wrapped_body_lines(body, text_width)
+local function wrapped_body_lines(body, text_width, start_col)
+  start_col = start_col or 0
   local result = {}
   for _, line in ipairs(vim.split(body or "", "\n", { plain = true })) do
     if line == "" then
       result[#result + 1] = ""
     else
-      for _, wrapped in ipairs(wrap_line(line, text_width)) do
+      for _, wrapped in ipairs(wrap_line(line, text_width, start_col)) do
         result[#result + 1] = wrapped
       end
     end
@@ -89,8 +92,9 @@ end
 
 local max_visible_body_lines = 3
 
-local function truncated_body_lines(body, text_width)
-  local wrapped = wrapped_body_lines(body, text_width)
+local function truncated_body_lines(body, text_width, start_col)
+  start_col = start_col or 0
+  local wrapped = wrapped_body_lines(body, text_width, start_col)
   if #wrapped <= max_visible_body_lines then
     return wrapped
   end
@@ -103,8 +107,9 @@ local function truncated_body_lines(body, text_width)
   return result
 end
 
-local function pad(text, width)
-  local pad_len = math.max(0, width - vim.fn.strdisplaywidth(text))
+local function pad(text, width, start_col)
+  start_col = start_col or 0
+  local pad_len = math.max(0, width - vim.fn.strdisplaywidth(text, start_col))
   return text .. string.rep(" ", pad_len)
 end
 
@@ -122,18 +127,20 @@ local function border_bottom(width)
   return "└" .. string.rep("─", width - 2) .. "┘"
 end
 
-local function truncate_to_width(text, width)
-  if vim.fn.strdisplaywidth(text) <= width then
+local function truncate_to_width(text, width, start_col)
+  start_col = start_col or 0
+  if vim.fn.strdisplaywidth(text, start_col) <= width then
     return text
   end
-  local prefix, _ = split_at_display_width(text, width)
+  local prefix, _ = split_at_display_width(text, width, start_col)
   return prefix
 end
 
 local function body_virt_line(text, width)
   local inner = width - 4
-  local truncated = truncate_to_width(text, inner)
-  local padded = pad(truncated, inner)
+  local body_start_col = 2
+  local truncated = truncate_to_width(text, inner, body_start_col)
+  local padded = pad(truncated, inner, body_start_col)
   return {
     { "│ ", "FloatBorder" },
     { padded, "NormalFloat" },

@@ -41,6 +41,7 @@ number, so they follow the code when the file changes. See
         prev    = "[r",
         export  = "<leader>re",
         list    = "<leader>rl",
+        hover   = "K",
       },
       comment_close_keys = {
         { modes = { "n" }, key = "q" },
@@ -48,7 +49,8 @@ number, so they follow the code when the file changes. See
       },
     })
 <
-All fields are optional. Keymaps left nil or empty are not created.
+All fields are optional. Keymaps left empty or set to `false` are not created.
+`keymaps.hover = false` disables the hover mapping.
 
 ==============================================================================
 3. COMMANDS                                             *local-review-commands*

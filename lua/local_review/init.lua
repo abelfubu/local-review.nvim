@@ -25,7 +25,7 @@ local function command(name, rhs, opts)
 end
 
 local function map(mode, lhs, rhs, desc)
-  if lhs == nil or lhs == "" then
+  if lhs == nil or lhs == "" or lhs == false then
     return
   end
 
@@ -207,13 +207,34 @@ function M.setup(opts)
 
     if hover_fallback then
       if hover_fallback.callback then
-        hover_fallback.callback()
+        if hover_fallback.expr == 1 then
+          local ok, result = pcall(hover_fallback.callback)
+          if ok and result then
+            local keys = vim.api.nvim_replace_termcodes(tostring(result), true, false, true)
+            vim.api.nvim_feedkeys(keys, "m", false)
+          end
+        else
+          hover_fallback.callback()
+        end
+      elseif hover_fallback.expr == 1 and hover_fallback.rhs then
+        local ok, result = pcall(vim.api.nvim_eval, hover_fallback.rhs)
+        if ok and result then
+          local keys = vim.api.nvim_replace_termcodes(tostring(result), true, false, true)
+          vim.api.nvim_feedkeys(keys, "m", false)
+        end
       elseif hover_fallback.rhs then
         local keys = vim.api.nvim_replace_termcodes(hover_fallback.rhs, true, true, true)
-        vim.api.nvim_feedkeys(keys, "n", false)
+        vim.api.nvim_feedkeys(keys, "m", false)
       end
     elseif vim.lsp and vim.lsp.buf and vim.lsp.buf.hover then
-      vim.lsp.buf.hover()
+      local clients = vim.lsp.get_clients({ bufnr = source_bufnr, method = "textDocument/hover" })
+      if #clients > 0 then
+        vim.lsp.buf.hover()
+      else
+        pcall(function()
+          vim.cmd("normal! K")
+        end)
+      end
     else
       pcall(function()
         vim.cmd("normal! K")
