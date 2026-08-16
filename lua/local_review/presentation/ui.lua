@@ -563,7 +563,6 @@ function M.open_current_line(range)
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = true
-  vim.bo[bufnr].filetype = "markdown"
   vim.api.nvim_buf_set_name(bufnr, editor_buffer_name(source_bufnr, start_line, end_line))
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 

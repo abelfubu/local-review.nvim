@@ -30,6 +30,7 @@ local editor_col = vim.fn.win_screenpos(editor_winid)[2]
 local right_col = vim.fn.win_screenpos(right_winid)[2]
 assert(editor_col >= right_col, "comment editor appeared in the left split")
 local editor_bufnr = vim.api.nvim_get_current_buf()
+assert(vim.bo[editor_bufnr].filetype == "", "comment editor buffer has a filetype set")
 vim.api.nvim_buf_set_lines(editor_bufnr, 0, -1, false, { "split navigation comment" })
 
 vim.api.nvim_set_current_win(left_winid)
