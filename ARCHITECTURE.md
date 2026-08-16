@@ -3,7 +3,7 @@
 local-review.nvim is organized in four layers. `require` edges must point **downward only** —
 a module may depend on its own layer or layers below it, never upward.
 
-```
+```text
 lua/local_review/
 ├── init.lua                     (presentation: keymaps + commands)
 ├── domain/        comment_store · positioning   (vim-free, busted-tested)
@@ -12,8 +12,9 @@ lua/local_review/
 └── presentation/  ui · markers · telescope
 ```
 
-Layer violations are greppable:
-`grep -rn 'require("local_review.\(application\|presentation\)' lua/local_review/domain/ lua/local_review/infrastructure/` must stay empty.
+Layer violations are checked mechanically: `./scripts/layers.sh` fails on any
+upward require (domain → anything above, infrastructure → application/presentation,
+application → presentation). Run it with the commit gate.
 
 ## Dependency rules
 

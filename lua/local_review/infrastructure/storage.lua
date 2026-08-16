@@ -44,14 +44,21 @@ local function apply_removal(scope_root, data, matched, kept)
   end
 
   data.comments = kept
-  if #kept == 0 then
+  local removed_ids = {}
+  for _, comment in ipairs(removable) do
+    removed_ids[comment.id] = true
+  end
+
+  local ok, err = M.save_scope(scope_root, data, { remove_ids = removed_ids })
+  if not ok then
+    return nil, err
+  end
+
+  -- A concurrent writer may have merged extra comments back in; only delete
+  -- the scope file when the persisted state is truly empty.
+  if #data.comments == 0 then
     if not M.delete_scope(scope_root) then
       return nil, "Failed to delete the empty review scope."
-    end
-  else
-    local ok, err = M.save_scope(scope_root, data)
-    if not ok then
-      return nil, err
     end
   end
   return removable, nil
@@ -171,7 +178,11 @@ local function merge_comments(save_comments, disk_comments)
   return merged
 end
 
-function M.save_scope(scope_root, data)
+---@param scope_root string
+---@param data table
+---@param opts { remove_ids: table<string, boolean>? }?
+---@return boolean? ok, string? err
+function M.save_scope(scope_root, data, opts)
   local path = M.scope_file(scope_root)
   data.scope_root = scope_root
   data.comments = type(data.comments) == "table" and data.comments or {}
@@ -192,8 +203,28 @@ function M.save_scope(scope_root, data)
     end
   end
 
-  if vim.fn.writefile({ vim.json.encode(data) }, path) ~= 0 then
+  -- Tombstones: ids removed by the caller stay removed even when the merge
+  -- above resurrected them from a concurrently modified disk file.
+  if opts and opts.remove_ids then
+    local filtered = {}
+    for _, comment in ipairs(data.comments) do
+      if not opts.remove_ids[comment.id] then
+        table.insert(filtered, comment)
+      end
+    end
+    data.comments = filtered
+  end
+
+  -- Atomic write: encode to a temp file, then rename over the scope file so a
+  -- failed write never leaves a truncated scope behind.
+  local tmp_path = path .. ".tmp"
+  if vim.fn.writefile({ vim.json.encode(data) }, tmp_path) ~= 0 then
     return nil, string.format("Failed to save review comments to %s.", path)
+  end
+  local renamed, rename_err = os.rename(tmp_path, path)
+  if not renamed then
+    os.remove(tmp_path)
+    return nil, string.format("Failed to save review comments to %s: %s", path, rename_err or "rename failed")
   end
 
   -- Remember the fingerprint of the file we just produced.

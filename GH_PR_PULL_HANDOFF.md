@@ -36,15 +36,21 @@ GitHub reviewer → LocalReviewGhPull → inline code comments → LocalReviewEx
 
 ## Next: Phase 3 — GraphQL adapter
 
-Create `lua/local_review/gh_pr_comments.lua` — vim-free except a thin `fetch`:
+Create `lua/local_review/application/gh_pr_comments.lua` — application layer, same as `gh_pr.lua`
+which already owns the `gh` CLI boundary. Vim-free except a thin `fetch`:
 
 ```lua
 local M = {}
 
 M.QUERY = [[ ...const GraphQL string... ]]  -- reviewThreads: id, isResolved, isOutdated, path,
-                                            -- line/originalLine, startLine/originalStartLine,
-                                            -- diffSide, diffHunk; comments: id, databaseId, body,
+                                            -- subjectType, line/originalLine, startLine/originalStartLine,
+                                            -- diffSide, startDiffSide, diffHunk; comments: id, body,
                                             -- author{login}, url, commit{oid}, pullRequestReview{id}
+                                            -- (no databaseId — deprecated by GitHub)
+
+-- Pagination is required: reviewThreads(first: 100) caps at 100. Query pageInfo
+-- { hasNextPage endCursor } and follow cursors until exhausted; the same applies
+-- to the nested comments connection on long threads.
 
 ---@param node table raw reviewThread node
 ---@return string? err  -- nil when valid
@@ -70,9 +76,16 @@ TDD order:
 
 Normalization decisions:
 
+- Reject non-line threads before normalizing: `subjectType ~= "LINE"` (e.g. FILE-level
+  threads) have no line anchor — skip them (log/notify), do not guess a position
+- Diff side: `diffSide == "RIGHT"` anchors at `line`; `"LEFT"` anchors at `originalLine`
+  and the comment refers to removed code — mark it outdated when it cannot map. Ranges
+  resolve `startDiffSide` with `startLine`/`originalStartLine` the same way. When in
+  doubt, stale — never guess
 - `absolute_path` = `scope_root .. "/" .. thread.path`
-- Anchors: `anchor.line_number = thread.originalLine`, `anchor.line_text` = last hunk line for
-  that line from `diffHunk` (strip leading `+`/context marker); ranges use originalStartLine/originalLine
+- Anchors: `anchor.line_number` from the side-resolved line, `anchor.line_text` = last hunk
+  line for that line from `diffHunk` (strip leading `+`/`-`/context marker); ranges use
+  the resolved start/end lines
 - `remote` table filled from thread + comment node; `resolved = thread.isResolved`, `outdated = thread.isOutdated`
 - `id` = `"gh:" .. comment_node.id` (stable, namespaced)
 
@@ -81,14 +94,19 @@ Normalization decisions:
 Sync rules (upsert into storage):
 
 - Remote identity = `(repository, pull_number, thread_id, comment_id)`
-- Re-pulling upserts; bodies edited on GitHub update in place; never touch `origin == "local"` comments
+- Add `comment_store.upsert_remote(comments, comment)`: matches by remote identity —
+  NOT by path/line (two threads can share a line, and `upsert_comment` hardcodes
+  `origin = "local"`). Bodies edited on GitHub update in place; `origin == "local"`
+  comments are never touched
 - Threads now resolved/absent → mark `remote.resolved`/`stale`, **never delete** during sync
-- Persist only after a complete successful fetch (atomic: temp file + rename)
+- Persist only after a complete successful fetch. `storage.save_scope` is already atomic
+  (temp file + rename) and supports `remove_ids` tombstones — build sync on it
 - Backoff on 403/429; no caching of fetch results
 - Remote comments are persisted in the same scope file as locals (same PR branch = same scope_root)
 
 Command wiring in `init.lua`: resolve repo root via `context`, PR via existing `gh_pr.lua` helpers
-(extract `get_pr_info` for reuse), call adapter `fetch`, merge into scope, `markers.refresh`.
+(extract `get_pr_info` for reuse), call adapter `fetch`, merge into scope, then fire
+`User`/`LocalReviewChanged` (never call `markers` directly — see ARCHITECTURE.md).
 
 ## Phase 5 — UI + export
 

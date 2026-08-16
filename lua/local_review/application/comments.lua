@@ -275,8 +275,8 @@ function M.delete_line_comment(bufnr, line)
   end
 
   local comments = line_state.scope_state.data.comments
-  local comment, reason = comment_store.remove_comment(comments, comments[line_state.index])
-  if not comment then
+  local removed, reason = comment_store.remove_comment(comments, comments[line_state.index])
+  if not removed then
     return nil, reason
   end
 
@@ -284,7 +284,7 @@ function M.delete_line_comment(bufnr, line)
   if not ok then
     return nil, err
   end
-  return reason
+  return "deleted"
 end
 
 function M.delete_current_line()
