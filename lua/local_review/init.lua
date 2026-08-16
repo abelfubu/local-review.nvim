@@ -139,6 +139,10 @@ function M.setup(opts)
       require("local_review.application.gh_pr").create_review(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
 
+    command("LocalReviewGhPull", function()
+      require("local_review.application.gh_pr_sync").pull()
+    end, {})
+
     command("LocalReviewExport", function(command_opts)
       require("local_review.application.export").open_export(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
