@@ -5,7 +5,13 @@ local M = {}
 ---@param cwd string?
 ---@return string? output, string? error
 function M.run(command, cwd)
-  local result = vim.system(command, { cwd = cwd, text = true }):wait()
+  local timeout_ms = 30000
+  local proc = vim.system(command, { cwd = cwd, text = true })
+  local result = proc:wait(timeout_ms)
+
+  if result == nil then
+    return nil, "gh command timed out after " .. timeout_ms .. "ms"
+  end
 
   if result.code ~= 0 then
     return nil, vim.trim(result.stderr or result.stdout or "")

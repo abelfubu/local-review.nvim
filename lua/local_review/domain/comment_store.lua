@@ -383,6 +383,12 @@ function M.remote_identity(comment)
   if not remote then
     return nil
   end
+  if not remote.repository or not remote.pull_number or not remote.thread_id or not remote.comment_id then
+    return nil
+  end
+  if type(remote.pull_number) ~= "number" then
+    return nil
+  end
   return {
     repository = remote.repository,
     pull_number = remote.pull_number,
@@ -471,6 +477,10 @@ local function remote_comment_changed(existing, fetched)
     return true
   end
 
+  if existing.updated_at ~= fetched.updated_at then
+    return true
+  end
+
   return false
 end
 
@@ -504,6 +514,7 @@ local function update_remote_comment(existing, fetched)
   existing.absolute_path = fetched.absolute_path
   existing.relative_path = fetched.relative_path
   existing.remote = fetched.remote
+  existing.updated_at = fetched.updated_at
 
   existing.anchor = merge_anchor(existing.anchor, fetched.anchor) or existing.anchor
   existing.anchor_end = merge_anchor(existing.anchor_end, fetched.anchor_end)
@@ -579,6 +590,7 @@ function M.reconcile_remote(existing, fetched, remote_scope)
     local identity = M.remote_identity(comment)
     if identity and fetched_by_key[identity_key(identity)] then
       table.insert(result, comment)
+      fetched_by_key[identity_key(identity)] = nil
       changed = true
       stats.inserted = stats.inserted + 1
     end

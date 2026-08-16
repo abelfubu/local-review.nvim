@@ -443,6 +443,24 @@ describe("gh_pr_comments", function()
       assert.are.equal(101, #result)
     end)
 
+    it("errors when review thread pagination cursor does not advance", function()
+      graphql_handler = function(_, variables)
+        if variables.pr then
+          return graphql_page({ make_thread("t1") }, true, "stuck")
+        end
+        return {}
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(result)
+      assert.is_truthy(err)
+      assert.matches("cursor did not advance", err)
+    end)
+
     it("paginates nested comments on a thread", function()
       local thread = make_thread("t1", {
         comments = {
@@ -495,6 +513,57 @@ describe("gh_pr_comments", function()
       assert.are.equal("gh:c2", result[2].id)
     end)
 
+    it("errors when nested comment pagination cursor does not advance", function()
+      local thread = make_thread("t1", {
+        comments = {
+          pageInfo = { hasNextPage = true, endCursor = "cc1" },
+          nodes = {
+            {
+              id = "c1",
+              body = "first",
+              author = { login = "a" },
+              url = "u1",
+              createdAt = "2024-01-01T00:00:00Z",
+              updatedAt = "2024-01-01T00:00:00Z",
+              commit = { oid = "abc" },
+              pullRequestReview = { id = "r1" },
+              diffHunk = "@@ -1,2 +1,2 @@\n old\n+new",
+            },
+          },
+        },
+      })
+
+      local extra_comment = {
+        id = "c2",
+        body = "second",
+        author = { login = "a" },
+        url = "u2",
+        createdAt = "2024-01-01T00:00:00Z",
+        updatedAt = "2024-01-01T00:00:00Z",
+        commit = { oid = "abc" },
+        pullRequestReview = { id = "r1" },
+        diffHunk = "@@ -1,2 +1,2 @@\n old\n+new",
+      }
+
+      graphql_handler = function(_, variables)
+        if variables.pr then
+          return graphql_page({ thread }, false)
+        elseif variables.id == "t1" and variables.cursor == "cc1" then
+          return comments_page({ extra_comment }, true, "cc1")
+        end
+        return {}
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(result)
+      assert.is_truthy(err)
+      assert.matches("cursor did not advance", err)
+    end)
+
     it("returns a single error on mid-pagination failure", function()
       local page1 = { make_thread("t1") }
 
@@ -527,6 +596,27 @@ describe("gh_pr_comments", function()
       end)
       assert.is_nil(err)
       assert.are.equal(1, #result)
+    end)
+
+    it("uses exponential backoff in seconds on transient errors", function()
+      local sleeps = {}
+      module._sleep = function(seconds)
+        table.insert(sleeps, seconds)
+      end
+
+      next_system_error = "HTTP 403: API rate limit"
+      next_system_result =
+        { code = 0, stdout = vim.json.encode(graphql_page({ make_thread("t1") }, false)), stderr = "" }
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(1, #result)
+      assert.are.equal(1, #sleeps)
+      assert.are.near(1.0, sleeps[1], 0.001)
     end)
 
     it("filters out resolved threads", function()
@@ -584,6 +674,41 @@ describe("gh_pr_comments", function()
       assert.are.equal("repo", captured.repo)
       assert.are.equal("4", captured.pr)
       assert.are.equal("gh:t1-c1", result[1].id)
+    end)
+
+    it("sends string GraphQL variables as raw strings and pr as an integer", function()
+      local function find_pair(command, flag, prefix)
+        for i = 1, #command - 1 do
+          if command[i] == flag and command[i + 1]:match("^" .. prefix) then
+            return true
+          end
+        end
+        return false
+      end
+
+      graphql_handler = function()
+        return graphql_page({ make_thread("t1") }, false)
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+
+      local graphql_cmd
+      for _, process in ipairs(processes) do
+        if process.command[1] == "gh" and process.command[2] == "api" and process.command[3] == "graphql" then
+          graphql_cmd = process.command
+          break
+        end
+      end
+      assert.is_not_nil(graphql_cmd)
+
+      assert.is_true(find_pair(graphql_cmd, "-f", "owner=owner"))
+      assert.is_true(find_pair(graphql_cmd, "-f", "repo=repo"))
+      assert.is_true(find_pair(graphql_cmd, "-F", "pr=4"))
     end)
   end)
 

@@ -687,6 +687,27 @@ describe("comment_store remote identity and reconcile", function()
     assert.is_nil(comment_store.remote_identity(local_comment()))
   end)
 
+  it("remote_identity returns nil when the remote shape is incomplete", function()
+    local missing_repository = remote_comment()
+    missing_repository.remote.repository = nil
+    assert.is_nil(comment_store.remote_identity(missing_repository))
+
+    local missing_pull_number = remote_comment()
+    missing_pull_number.remote.pull_number = nil
+    assert.is_nil(comment_store.remote_identity(missing_pull_number))
+
+    local missing_thread_id = remote_comment()
+    missing_thread_id.remote.thread_id = nil
+    assert.is_nil(comment_store.remote_identity(missing_thread_id))
+
+    local missing_comment_id = remote_comment()
+    missing_comment_id.remote.comment_id = nil
+    assert.is_nil(comment_store.remote_identity(missing_comment_id))
+
+    local invalid_pull_number = remote_comment({ remote = { pull_number = "42" } })
+    assert.is_nil(comment_store.remote_identity(invalid_pull_number))
+  end)
+
   it("same_remote is true only when the full identity matches", function()
     local a = remote_comment()
     local b = remote_comment()
@@ -703,6 +724,14 @@ describe("comment_store remote identity and reconcile", function()
 
     assert.is_false(comment_store.same_remote(a, local_comment()))
     assert.is_false(comment_store.same_remote(local_comment(), a))
+  end)
+
+  it("same_remote is false when an identity is incomplete", function()
+    local a = remote_comment()
+    a.remote.comment_id = nil
+    local b = remote_comment()
+    b.remote.comment_id = nil
+    assert.is_false(comment_store.same_remote(a, b))
   end)
 
   it("reconcile_remote leaves local comments untouched", function()
@@ -743,6 +772,22 @@ describe("comment_store remote identity and reconcile", function()
     assert.are.equal("gh:comment-1", result.comments[1].id)
   end)
 
+  it("reconcile_remote copies updated_at from fetched comments", function()
+    local existing = { remote_comment({ updated_at = "2024-01-01T00:00:00Z" }) }
+    local fetched = {
+      remote_comment({
+        body = "updated note",
+        updated_at = "2024-02-02T00:00:00Z",
+      }),
+    }
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal("2024-02-02T00:00:00Z", result.comments[1].updated_at)
+    assert.are.equal("2024-01-01T00:00:00Z", result.comments[1].created_at)
+  end)
+
   it("reconcile_remote adopts fetched position but preserves local anchor text", function()
     local existing = { remote_comment({ anchor = { line_number = 5, line_text = "buffer text" } }) }
     local fetched = { remote_comment({ anchor = { line_number = 7, line_text = "hunk text" } }) }
@@ -762,6 +807,18 @@ describe("comment_store remote identity and reconcile", function()
 
     assert.is_true(result.changed)
     assert.are.equal(2, #result.comments)
+  end)
+
+  it("reconcile_remote does not double-insert fetched comments with the same identity", function()
+    local existing = {}
+    local fetched = { remote_comment(), remote_comment({ id = "gh:comment-2" }) }
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal(1, #result.comments)
+    assert.are.equal("gh:comment-1", result.comments[1].id)
+    assert.are.equal(1, result.stats.inserted)
   end)
 
   it("reconcile_remote marks existing comments resolved when absent from fetched", function()

@@ -87,13 +87,13 @@ query($id: ID!, $cursor: String) {
 ]]
 
 local MAX_RETRIES = 3
-local RETRY_DELAY = 0.01
+local RETRY_DELAY = 1.0
 
 M._sleep = function(seconds)
-  local start = os.clock()
-  while os.clock() - start < seconds do
-    -- busy-wait to avoid depending on vim.uv or a subprocess sleep
-  end
+  -- `Retry-After` / `x-ratelimit-reset` headers are not exposed by the
+  -- current `gh.run` helper (which does not pass `-i`). Use a simple
+  -- exponential backoff until we need header-aware retry logic.
+  vim.uv.sleep(math.floor(seconds * 1000))
 end
 
 local function is_transient_error(stderr)
@@ -123,7 +123,8 @@ local function run_query(scope_root, query, variables)
 
   for key, value in pairs(variables) do
     if value ~= nil then
-      table.insert(command, "-F")
+      local flag = (key == "pr") and "-F" or "-f"
+      table.insert(command, flag)
       table.insert(command, key .. "=" .. tostring(value))
     end
   end
@@ -307,8 +308,14 @@ local function fetch_all_comments(scope_root, thread)
     table.insert(nodes, node)
   end
 
-  local cursor = thread.comments.pageInfo and thread.comments.pageInfo.endCursor
+  local prev_cursor
   while thread.comments.pageInfo and thread.comments.pageInfo.hasNextPage do
+    local cursor = thread.comments.pageInfo.endCursor
+    if cursor == prev_cursor then
+      return nil, "Pagination cursor did not advance for thread comments"
+    end
+    prev_cursor = cursor
+
     local page, page_err = fetch_comments_page(scope_root, thread.id, cursor)
     if not page then
       return nil, page_err
@@ -319,7 +326,6 @@ local function fetch_all_comments(scope_root, thread)
     end
 
     thread.comments.pageInfo = page.pageInfo
-    cursor = page.pageInfo and page.pageInfo.endCursor
   end
 
   return nodes
@@ -356,7 +362,11 @@ local function fetch_threads(scope_root, owner, repo, pr, cursor, threads)
   end
 
   if review_threads.pageInfo and review_threads.pageInfo.hasNextPage then
-    return fetch_threads(scope_root, owner, repo, pr, review_threads.pageInfo.endCursor, threads)
+    local next_cursor = review_threads.pageInfo.endCursor
+    if next_cursor == cursor then
+      return nil, "Pagination cursor did not advance for review threads"
+    end
+    return fetch_threads(scope_root, owner, repo, pr, next_cursor, threads)
   end
 
   return threads
