@@ -6,10 +6,17 @@ local M = {}
 ---@return string? output, string? error
 function M.run(command, cwd)
   local timeout_ms = 30000
-  local proc = vim.system(command, { cwd = cwd, text = true })
+  local ok, proc = pcall(vim.system, command, { cwd = cwd, text = true })
+  if not ok then
+    return nil, vim.trim(tostring(proc))
+  end
+  if proc == nil then
+    return nil, "gh command failed to start"
+  end
+
   local result = proc:wait(timeout_ms)
 
-  if result == nil then
+  if result == nil or result.code == 124 then
     return nil, "gh command timed out after " .. timeout_ms .. "ms"
   end
 

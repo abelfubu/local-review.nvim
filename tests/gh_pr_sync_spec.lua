@@ -222,6 +222,8 @@ describe("GitHub PR comment pull", function()
     _G.vim = nil
     package.preload["local_review.infrastructure.context"] = nil
     package.preload["local_review.application.gh_pr"] = nil
+    package.loaded["local_review.infrastructure.context"] = nil
+    package.loaded["local_review.application.gh_pr"] = nil
     package.loaded["local_review.application.gh_pr_sync"] = nil
   end)
 
