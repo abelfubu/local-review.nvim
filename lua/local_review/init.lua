@@ -4,6 +4,7 @@ local defaults = {
   marker_text = "▎",
   marker_hl = "LocalReviewMarker",
   stale_marker_hl = "LocalReviewStaleMarker",
+  gh_marker_hl = "LocalReviewGhMarker",
   storage_dir = vim.fs.joinpath(vim.fn.stdpath("state"), "local-review"),
   keymaps = {},
   comment_close_keys = {
@@ -92,6 +93,10 @@ function M.setup(opts)
 
   -- Marker for stale comments (anchor text no longer found in the file).
   vim.api.nvim_set_hl(0, "LocalReviewStaleMarker", { link = "DiagnosticWarn", default = true })
+
+  -- Marker for imported GitHub review comments. Distinct group so it can be
+  -- styled independently; defaults to the same info style as local markers.
+  vim.api.nvim_set_hl(0, "LocalReviewGhMarker", { link = "DiagnosticInfo", default = true })
 
   -- Title of the comment box while creating/editing. Linked to a group that
   -- is orange in most colorschemes; override with :highlight to customize.

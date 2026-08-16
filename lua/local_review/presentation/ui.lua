@@ -1,6 +1,7 @@
 local M = {}
 
 local comments = require("local_review.application.comments")
+local comment_store = require("local_review.domain.comment_store")
 
 local namespace = vim.api.nvim_create_namespace("local-review-ui")
 local placeholder_namespace = vim.api.nvim_create_namespace("local-review-ui-placeholder")
@@ -19,6 +20,10 @@ local state = {
   initial_body = "",
   reserved_height = 0,
   closing = false,
+  viewer_bufnr = nil,
+  viewer_winid = nil,
+  viewer_source_winid = nil,
+  viewer_group = nil,
 }
 
 local function is_valid_buffer(bufnr)
@@ -30,7 +35,8 @@ local function is_valid_window(winid)
 end
 
 local function is_open()
-  return is_valid_buffer(state.editor_bufnr) and is_valid_window(state.editor_winid)
+  return (is_valid_buffer(state.editor_bufnr) and is_valid_window(state.editor_winid))
+    or (is_valid_buffer(state.viewer_bufnr) and is_valid_window(state.viewer_winid))
 end
 
 local function body_lines(body)
@@ -106,6 +112,23 @@ local function cleanup()
   state.closing = false
 end
 
+local function close_viewer()
+  local source_winid = state.viewer_source_winid
+  if is_valid_window(state.viewer_winid) then
+    pcall(vim.api.nvim_win_close, state.viewer_winid, true)
+  end
+  if is_valid_window(source_winid) then
+    pcall(vim.api.nvim_set_current_win, source_winid)
+  end
+  if state.viewer_group then
+    pcall(vim.api.nvim_del_augroup_by_id, state.viewer_group)
+  end
+  state.viewer_bufnr = nil
+  state.viewer_winid = nil
+  state.viewer_source_winid = nil
+  state.viewer_group = nil
+end
+
 local function close_window()
   if is_valid_window(state.editor_winid) then
     pcall(vim.api.nvim_win_close, state.editor_winid, true)
@@ -145,7 +168,12 @@ local function persist(opts)
 end
 
 function M.close_active()
-  if not is_open() then
+  if is_valid_buffer(state.viewer_bufnr) and is_valid_window(state.viewer_winid) then
+    close_viewer()
+    return true
+  end
+
+  if not is_valid_buffer(state.editor_bufnr) or not is_valid_window(state.editor_winid) then
     cleanup()
     return true
   end
@@ -209,6 +237,147 @@ local function inline_dimensions(lines, source_winid, anchor_row)
     width = width,
     height = height,
   }
+end
+
+function M.open_remote_viewer(source_bufnr, source_winid, line)
+  if not M.close_active() then
+    return
+  end
+
+  local line_state = comments.get_line_state(source_bufnr, line)
+  if not line_state or not line_state.ctx then
+    return
+  end
+
+  local all_comments = comments.comments_for_buffer(source_bufnr, { silent = true })
+  local matches = comment_store.comments_at_line(all_comments, line_state.ctx.absolute_path, line)
+  local remote_comments = {}
+  for _, comment in ipairs(matches) do
+    if comment_store.is_remote(comment) then
+      remote_comments[#remote_comments + 1] = comment
+    end
+  end
+
+  if #remote_comments == 0 then
+    return
+  end
+
+  local viewer_lines = {}
+  for index, comment in ipairs(remote_comments) do
+    local author = comment.remote and comment.remote.author or "unknown"
+    local meta = {}
+    if comment.remote and comment.remote.resolved then
+      table.insert(meta, "resolved")
+    end
+    if comment.remote and comment.remote.outdated then
+      table.insert(meta, "outdated")
+    end
+    if comment.stale then
+      table.insert(meta, "stale")
+    end
+
+    table.insert(viewer_lines, string.format("### @%s", author))
+    if #meta > 0 then
+      table.insert(viewer_lines, string.format("_(%s)_", table.concat(meta, ", ")))
+    end
+
+    for _, body_line in ipairs(vim.split(comment.body or "", "\n", { plain = true })) do
+      table.insert(viewer_lines, body_line)
+    end
+
+    if index < #remote_comments then
+      table.insert(viewer_lines, "---")
+      table.insert(viewer_lines, "")
+    end
+  end
+
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
+  vim.api.nvim_buf_set_name(
+    bufnr,
+    string.format("local-review://github-comment/%s:%d", line_state.ctx.absolute_path, line)
+  )
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, viewer_lines)
+  vim.bo[bufnr].modifiable = false
+
+  local size = inline_dimensions({ " " }, source_winid, nil)
+  local max_height = math.floor(vim.o.lines * 0.6)
+  local height = math.min(math.max(6, #viewer_lines), max_height)
+  local anchor_row = vim.api.nvim_win_call(source_winid, function()
+    return vim.fn.winline()
+  end)
+
+  local winid = vim.api.nvim_open_win(bufnr, true, {
+    relative = "win",
+    win = source_winid,
+    row = anchor_row,
+    col = text_column_offset(source_winid),
+    width = size.width,
+    height = height,
+    style = "minimal",
+    border = { "┌", "─", "┐", "│", "┘", "─", "└", "│" },
+    title = " GitHub Review ",
+    title_pos = "left",
+    noautocmd = true,
+  })
+
+  state.viewer_bufnr = bufnr
+  state.viewer_winid = winid
+  state.viewer_source_winid = source_winid
+
+  vim.wo[winid].wrap = true
+  vim.wo[winid].linebreak = true
+  vim.wo[winid].number = false
+  vim.wo[winid].relativenumber = false
+  vim.wo[winid].signcolumn = "no"
+  vim.wo[winid].statuscolumn = " "
+  vim.wo[winid].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:LocalReviewEditorTitle"
+
+  local ok, render = pcall(require, "render-markdown")
+  if ok and render and render.buf_enable then
+    render.buf_enable(bufnr)
+  end
+
+  local function map(modes, lhs, rhs, desc)
+    if lhs == nil or lhs == "" then
+      return
+    end
+    vim.keymap.set(modes, lhs, rhs, { buffer = bufnr, silent = true, nowait = true, desc = desc })
+  end
+
+  local opts = require("local_review").get_opts()
+  for _, keymap in ipairs(opts.comment_close_keys or {}) do
+    map(keymap.modes, keymap.key, function()
+      close_viewer()
+    end, "Local Review: Close viewer")
+  end
+  map("n", "<Esc>", function()
+    close_viewer()
+  end, "Local Review: Close viewer")
+
+  local group = vim.api.nvim_create_augroup("local-review-viewer-" .. bufnr, { clear = true })
+  state.viewer_group = group
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    buffer = bufnr,
+    callback = function(event)
+      if tonumber(event.match) ~= winid then
+        return
+      end
+      state.viewer_bufnr = nil
+      state.viewer_winid = nil
+      state.viewer_source_winid = nil
+      if state.viewer_group then
+        pcall(vim.api.nvim_del_augroup_by_id, state.viewer_group)
+        state.viewer_group = nil
+      end
+    end,
+  })
+
+  pcall(vim.api.nvim_win_set_cursor, winid, { 1, 0 })
 end
 
 local function reserve_inline_space(bufnr, line, height)
@@ -370,6 +539,11 @@ function M.open_current_line(range)
     return
   end
 
+  if line_state.comment and comment_store.is_remote(line_state.comment) then
+    M.open_remote_viewer(source_bufnr, source_winid, start_line)
+    return
+  end
+
   -- Editing an existing comment always covers its full stored range.
   if line_state.comment then
     start_line = line_state.comment.anchor.line_number
@@ -399,7 +573,6 @@ function M.open_current_line(range)
   vim.bo[bufnr].bufhidden = "wipe"
   vim.bo[bufnr].swapfile = false
   vim.bo[bufnr].modifiable = true
-  vim.bo[bufnr].filetype = "markdown"
   vim.api.nvim_buf_set_name(bufnr, editor_buffer_name(source_bufnr, start_line, end_line))
   vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
 

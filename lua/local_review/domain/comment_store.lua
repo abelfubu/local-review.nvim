@@ -121,30 +121,32 @@ function M.comment_covers_line(comment, absolute_path, line)
   return line >= first and line <= last
 end
 
+---Returns every comment that covers the given line, sorted by the standard
+---comment sorter (path, line, created_at). Used by presentation and
+---navigation so multiple comments on the same line stay distinct.
 ---@param comments LocalReviewComment[]
 ---@param absolute_path string
 ---@param line integer
----@return LocalReviewComment?
-function M.find_comment_at_line(comments, absolute_path, line)
+---@return LocalReviewComment[]
+function M.comments_at_line(comments, absolute_path, line)
+  local matches = {}
   for _, comment in ipairs(comments) do
     if M.comment_covers_line(comment, absolute_path, line) then
-      return comment
+      table.insert(matches, comment)
     end
   end
-  return nil
+
+  table.sort(matches, M.comment_sorter)
+  return matches
 end
 
 ---@param comments LocalReviewComment[]
 ---@param absolute_path string
 ---@param line integer
----@return LocalReviewComment?, integer?
-function M.find_comment_entry_at_line(comments, absolute_path, line)
-  for index, comment in ipairs(comments) do
-    if M.comment_covers_line(comment, absolute_path, line) then
-      return comment, index
-    end
-  end
-  return nil, nil
+---@return LocalReviewComment?
+function M.find_comment_at_line(comments, absolute_path, line)
+  local matches = M.comments_at_line(comments, absolute_path, line)
+  return matches[1]
 end
 
 ---@param comment LocalReviewComment
@@ -291,9 +293,17 @@ end
 function M.upsert_comment(comments, opts)
   opts = opts or {}
 
-  local existing = M.find_comment_at_line(comments, opts.absolute_path, opts.line)
+  local matches = M.comments_at_line(comments, opts.absolute_path, opts.line)
+  local existing = matches[1]
+  local has_remote = false
+  for _, comment in ipairs(matches) do
+    if M.is_remote(comment) then
+      has_remote = true
+      break
+    end
+  end
 
-  if existing and M.is_remote(existing) then
+  if has_remote then
     return nil, nil, "Remote comments are read-only"
   end
 

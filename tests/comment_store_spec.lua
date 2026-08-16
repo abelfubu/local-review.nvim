@@ -135,8 +135,8 @@ describe("comment_store.upsert_comment", function()
 end)
 
 describe("comment_store containment", function()
-  local function make_range_comment()
-    return {
+  local function make_range_comment(overrides)
+    return helpers.merge({
       id = "r1",
       absolute_path = "/fake/path.lua",
       body = "range",
@@ -147,7 +147,7 @@ describe("comment_store containment", function()
       stale = false,
       anchor = { line_number = 4 },
       line_end = 6,
-    }
+    }, overrides)
   end
 
   it("finds the comment at the first, middle, and last line of the range", function()
@@ -166,15 +166,22 @@ describe("comment_store containment", function()
     assert.is_nil(comment_store.find_comment_at_line(comments, "/other/path.lua", 5))
   end)
 
-  it("finds the entry index for deletion by containment", function()
-    local comments = { make_range_comment() }
+  it("finds every comment covering the line, sorted", function()
+    local comments = {
+      make_range_comment({ id = "a", created_at = "t1" }),
+      make_range_comment({ id = "b", anchor = { line_number = 5 }, line_end = 5, created_at = "t2" }),
+    }
 
-    local comment, index = comment_store.find_comment_entry_at_line(comments, "/fake/path.lua", 5)
-    assert.are.equal(comments[1], comment)
-    assert.are.equal(1, index)
+    local matches = comment_store.comments_at_line(comments, "/fake/path.lua", 5)
 
-    table.remove(comments, index)
-    assert.are.equal(0, #comments)
+    assert.are.equal(2, #matches)
+    assert.are.equal("a", matches[1].id)
+    assert.are.equal("b", matches[2].id)
+  end)
+
+  it("returns an empty list when no comment covers the line", function()
+    local matches = comment_store.comments_at_line({}, "/fake/path.lua", 5)
+    assert.are.equal(0, #matches)
   end)
 end)
 
@@ -466,18 +473,20 @@ describe("remote comment guards", function()
     }, overrides)
   end
 
-  it("refuses to upsert over a remote comment", function()
-    local remote = make_remote_comment()
-    local comments = { remote }
+  it("refuses to upsert when a remote comment shares the line", function()
+    local comments = {
+      make_remote_comment({ id = "local", origin = "local", body = "local body", anchor = { line_number = 5 } }),
+      make_remote_comment({ id = "remote", body = "github body", anchor = { line_number = 5 } }),
+    }
 
     local comment, updated, reason = comment_store.upsert_comment(comments, base_opts({ line = 5, body = "hijack" }))
 
     assert.is_nil(comment)
     assert.is_nil(updated)
     assert.matches("read%-only", reason)
-    assert.are.equal("github body", remote.body)
-    assert.are.equal(5, remote.anchor.line_number)
-    assert.are.equal(1, #comments)
+    assert.are.equal("github body", comments[2].body)
+    assert.are.equal("local body", comments[1].body)
+    assert.are.equal(2, #comments)
   end)
 
   it("still creates a local comment on a different line", function()
