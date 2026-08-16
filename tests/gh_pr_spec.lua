@@ -142,6 +142,24 @@ describe("GitHub PR reviews", function()
     assert.are.equal(1, #processes)
   end)
 
+  it("excludes remote comments from the submitted review", function()
+    table.insert(path_comments, {
+      id = "remote-1",
+      origin = "github",
+      relative_path = "lua/example.lua",
+      body = "Reviewer feedback.",
+      anchor = { line_number = 10 },
+      stale = false,
+    })
+    summary_input = "Review summary"
+
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
+
+    assert.are.equal(1, #encoded_payload.comments)
+    assert.are.equal("Please rename this.", encoded_payload.comments[1].body)
+    assert.same({ "comment-1" }, removed_ids)
+  end)
+
   it("submits an approve review without comments", function()
     path_comments = {}
     review_choice = "Approve"

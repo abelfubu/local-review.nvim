@@ -2,6 +2,20 @@ local context = require("local_review.infrastructure.context")
 local storage = require("local_review.infrastructure.storage")
 local store = require("local_review.domain.comment_store")
 
+---What may be submitted as a GitHub review: local comments only. This is a
+---gh_pr policy (mirroring export's own filter), not a domain primitive.
+---@param comments LocalReviewComment[]
+---@return LocalReviewComment[]
+local function get_submittable_comments(comments)
+  local result = {}
+  for _, comment in ipairs(comments) do
+    if store.is_editable(comment) then
+      table.insert(result, comment)
+    end
+  end
+  return result
+end
+
 local M = {}
 
 local function run(command, cwd)
@@ -121,7 +135,7 @@ function M.create_review(path, opts)
     end
   end
 
-  local submittable_comments = store.submittable(path_comments)
+  local submittable_comments = get_submittable_comments(path_comments)
 
   local pr_info, err = get_pr_info(repo_root)
   if not pr_info then

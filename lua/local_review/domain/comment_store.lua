@@ -272,19 +272,6 @@ function M.is_editable(comment)
   return comment.origin == "local"
 end
 
----@param comments LocalReviewComment[]
----@return LocalReviewComment[]
-function M.submittable(comments)
-  local result = {}
-  for _, comment in pairs(comments) do
-    if M.is_editable(comment) then
-      table.insert(result, comment)
-    end
-  end
-
-  return result
-end
-
 ---@class UpsertCommentOpts
 ---@field absolute_path string
 ---@field body string

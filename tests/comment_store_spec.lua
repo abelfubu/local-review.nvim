@@ -444,12 +444,6 @@ describe("remote comments", function()
     assert.is_true(comment_store.is_editable(make_comment({ origin = "local" })))
     assert.is_false(comment_store.is_editable(make_comment({})))
   end)
-
-  it("checks for a submitable review session", function()
-    assert.is_true(#comment_store.submittable({ make_comment({ origin = "local" }) }) > 0)
-    assert.is_false(#comment_store.submittable({ make_comment({}) }) > 0)
-    assert.is_true(#comment_store.submittable({ make_comment({}), make_comment({ origin = "local" }) }) > 0)
-  end)
 end)
 
 describe("remote comment guards", function()
