@@ -1,15 +1,14 @@
 local M = {}
 
----Fetch PR comments from GitHub and merge them into the local storage scope.
----The persisted state is only written when the fetch succeeds completely and
----at least one comment changed.
+---Fetch PR comments from GitHub and replace the in-memory session set for
+---the scope. Failed fetches leave any existing session state untouched.
 ---@param scope_root string
 ---@param pr_info { number: integer }
----@param callback fun(ok: boolean, err: string?, stats: ReconcileRemoteStats?)
+---@param callback fun(ok: boolean, err: string?, stats: { count: integer }?)
 function M.sync(scope_root, pr_info, callback)
   local gh_pr_comments = require("local_review.application.gh_pr_comments")
-  local storage = require("local_review.infrastructure.storage")
-  local comment_store = require("local_review.domain.comment_store")
+  local gh_session = require("local_review.application.gh_session")
+  local context = require("local_review.infrastructure.context")
 
   gh_pr_comments.fetch(scope_root, pr_info, function(fetched, err)
     if err then
@@ -28,26 +27,16 @@ function M.sync(scope_root, pr_info, callback)
       return
     end
 
-    local data = storage.load_scope(scope_root)
-    local result = comment_store.reconcile_remote(data.comments or {}, fetched, {
-      repository = repository,
-      pull_number = pr_info.number,
-    })
-
-    if result.changed then
-      data.comments = result.comments
-      local ok, save_err = storage.save_scope(scope_root, data)
-      if not ok then
-        callback(false, save_err, nil)
-        return
-      end
+    local branch = context.current_branch(scope_root)
+    if not branch then
+      vim.notify(
+        "Failed to resolve the current git branch; pulled PR comments will be hidden until the branch is available.",
+        vim.log.levels.WARN
+      )
     end
+    gh_session.set(scope_root, fetched, pr_info.number, branch or "")
 
-    if fetched.skipped and fetched.skipped > 0 then
-      result.stats.skipped = fetched.skipped
-    end
-
-    callback(true, nil, result.stats)
+    callback(true, nil, { count = #fetched })
   end)
 end
 
@@ -85,28 +74,44 @@ function M.pull()
       return
     end
 
-    if
-      stats
-      and (stats.inserted > 0 or stats.updated > 0 or stats.resolved > 0 or (stats.skipped and stats.skipped > 0))
-    then
-      local message = string.format(
-        "Pulled PR comments: %d new, %d updated, %d resolved",
-        stats.inserted,
-        stats.updated,
-        stats.resolved
-      )
-      if stats.skipped and stats.skipped > 0 then
-        message = message .. string.format(", %d skipped", stats.skipped)
-      end
-      vim.notify(message, vim.log.levels.INFO)
-      vim.api.nvim_exec_autocmds("User", {
-        pattern = "LocalReviewChanged",
-        data = { scope_root = ctx.scope_root },
-      })
+    if stats and stats.count and stats.count > 0 then
+      vim.notify(string.format("Pulled %d PR comments.", stats.count), vim.log.levels.INFO)
     else
-      vim.notify("No new PR comments.", vim.log.levels.INFO)
+      vim.notify("No PR comments found — cleared previous session.", vim.log.levels.INFO)
     end
+    vim.api.nvim_exec_autocmds("User", {
+      pattern = "LocalReviewChanged",
+      data = { scope_root = ctx.scope_root },
+    })
   end)
+end
+
+---Clear the in-memory session set for the current scope and notify the UI.
+function M.clear_current()
+  local context = require("local_review.infrastructure.context")
+  local gh_session = require("local_review.application.gh_session")
+
+  local ctx, ctx_err = context.comment_context()
+  if not ctx then
+    if ctx_err == "Current buffer has no file path." then
+      local scope_root, scope_err = context.scope_root(vim.fn.getcwd())
+      if not scope_root then
+        vim.notify(scope_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+        return
+      end
+      ctx = { scope_root = scope_root }
+    else
+      vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+      return
+    end
+  end
+
+  gh_session.clear(ctx.scope_root)
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "LocalReviewChanged",
+    data = { scope_root = ctx.scope_root },
+  })
+  vim.notify("Cleared pulled PR comments for current scope.", vim.log.levels.INFO)
 end
 
 return M

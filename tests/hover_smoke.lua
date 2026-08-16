@@ -85,10 +85,15 @@ local remote_only_comment = {
   },
 }
 
-vim.fn.writefile(
-  { vim.json.encode({ scope_root = scope_root, comments = { local_comment, remote_comment, remote_only_comment } }) },
-  scope_file
-)
+vim.fn.writefile({ vim.json.encode({ scope_root = scope_root, comments = { local_comment } }) }, scope_file)
+
+-- Session remotes are not persisted; load them through the in-memory session store.
+local gh_session = require("local_review.application.gh_session")
+---@diagnostic disable-next-line: duplicate-set-field
+context.current_branch = function()
+  return "main"
+end
+gh_session.set(scope_root, { remote_comment, remote_only_comment }, 1, "main")
 
 require("local_review.presentation.markers").refresh(source_bufnr)
 

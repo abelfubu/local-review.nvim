@@ -150,6 +150,10 @@ function M.setup(opts)
       require("local_review.application.gh_pr_sync").pull()
     end, {})
 
+    command("LocalReviewGhClear", function()
+      require("local_review.application.gh_pr_sync").clear_current()
+    end, {})
+
     command("LocalReviewExport", function(command_opts)
       require("local_review.application.export").open_export(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
@@ -180,6 +184,13 @@ function M.setup(opts)
         if event.data and event.data.scope_root then
           require("local_review.presentation.markers").refresh_scope(event.data.scope_root)
         end
+      end,
+    })
+
+    vim.api.nvim_create_autocmd({ "BufEnter", "DirChanged" }, {
+      group = vim.api.nvim_create_augroup("local-review-branch-cache", { clear = true }),
+      callback = function()
+        require("local_review.infrastructure.context").invalidate_branch_cache()
       end,
     })
 

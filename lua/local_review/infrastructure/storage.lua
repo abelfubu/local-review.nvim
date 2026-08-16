@@ -22,30 +22,20 @@ function M.comments_for_path(scope_root, target_path, kind)
   return comment_store.matching_path({ { data = M.load_scope(scope_root) } }, target_path, kind)
 end
 
----Keeps remote comments (read-only policy), persists the kept list and
----deletes the scope file when no comments remain.
+---Persists the kept list and deletes the scope file when no comments remain.
 ---@param scope_root string
 ---@param data table scope data with a comments array
 ---@param matched LocalReviewComment[]
 ---@param kept LocalReviewComment[]
 ---@return LocalReviewComment[]? removed, string? err
 local function apply_removal(scope_root, data, matched, kept)
-  local removable = {}
-  for _, comment in ipairs(matched) do
-    if comment_store.is_editable(comment) then
-      table.insert(removable, comment)
-    else
-      table.insert(kept, comment)
-    end
-  end
-
-  if #removable == 0 then
+  if #matched == 0 then
     return {}, nil
   end
 
   data.comments = kept
   local removed_ids = {}
-  for _, comment in ipairs(removable) do
+  for _, comment in ipairs(matched) do
     removed_ids[comment.id] = true
   end
 
@@ -61,7 +51,7 @@ local function apply_removal(scope_root, data, matched, kept)
       return nil, "Failed to delete the empty review scope."
     end
   end
-  return removable, nil
+  return matched, nil
 end
 
 ---@param scope_root string
@@ -129,6 +119,16 @@ function M.load_scope(scope_root)
   local path = M.scope_file(scope_root)
   local data = load_json(path)
 
+  -- Legacy migration: remote comments used to be persisted but now live in
+  -- the per-session in-memory store only. Drop any persisted remotes.
+  local comments = {}
+  for _, comment in ipairs(data.comments or {}) do
+    if comment.origin ~= "github" then
+      table.insert(comments, comment)
+    end
+  end
+  data.comments = comments
+
   -- Record the disk fingerprint so subsequent writes can detect clobbering.
   last_known[scope_root] = { hash = file_hash(path) }
 
@@ -145,7 +145,12 @@ local function merge_comments(save_comments, disk_comments)
   local by_id = {}
 
   for _, comment in ipairs(disk_comments or {}) do
-    if type(comment) == "table" and type(comment.id) == "string" and comment.id ~= "" then
+    if
+      type(comment) == "table"
+      and type(comment.id) == "string"
+      and comment.id ~= ""
+      and comment.origin ~= "github"
+    then
       by_id[comment.id] = comment
     end
   end

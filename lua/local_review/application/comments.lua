@@ -4,6 +4,7 @@ local context = require("local_review.infrastructure.context")
 local positioning = require("local_review.domain.positioning")
 local storage = require("local_review.infrastructure.storage")
 local comment_store = require("local_review.domain.comment_store")
+local gh_session = require("local_review.application.gh_session")
 
 local state = {
   file_fingerprints = {},
@@ -107,6 +108,25 @@ local function scope_state_for_buffer(bufnr)
   }
 end
 
+---Return local and session remote comments for a path, merged and sorted.
+---@param scope_root string
+---@param target_path string
+---@param kind "file"|"directory"
+---@return LocalReviewComment[]
+local function union_comments_for_path(scope_root, target_path, kind)
+  local locals = storage.comments_for_path(scope_root, target_path, kind)
+  local remotes = gh_session.comments_for_path(scope_root, target_path, kind)
+
+  return comment_store.merge_sorted_comments(locals, remotes)
+end
+
+---Return the merged comment set for a buffer (local + session remotes).
+---@param ctx { absolute_path: string, scope_root: string }
+---@return LocalReviewComment[]
+local function buffer_comments(ctx)
+  return union_comments_for_path(ctx.scope_root, ctx.absolute_path, "file")
+end
+
 ---@return LocalReviewComment?, boolean?, string?
 local function upsert_comment(scope_state, ctx, line, body, line_end)
   local filetype = vim.bo[ctx.bufnr].filetype or ""
@@ -150,9 +170,25 @@ local function select_comment_at_line(comments, absolute_path, bufnr, line, adva
   end
   state.line_selection[bufnr] = { path = absolute_path, line = line, index = index }
 
-  local comment = matches[index]
-  local original_index = find_comment_index_by_id(comments, comment.id)
-  return comment, original_index
+  return matches[index], nil
+end
+
+---Build a line-state result. For session remotes the scope index is nil.
+---@param scope_state table
+---@param ctx table
+---@param comment LocalReviewComment?
+---@return table
+local function line_result(scope_state, ctx, comment)
+  return {
+    ---@type LocalReviewComment?
+    comment = comment,
+    index = comment and not comment_store.is_remote(comment) and find_comment_index_by_id(
+      scope_state.data.comments,
+      comment.id
+    ) or nil,
+    ctx = ctx,
+    scope_state = scope_state,
+  }
 end
 
 local function find_current_comment()
@@ -163,15 +199,9 @@ local function find_current_comment()
   end
 
   local line = current_line()
-  local comment, index =
-    select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, resolved.ctx.bufnr, line)
-  return {
-    ---@type LocalReviewComment?
-    comment = comment,
-    index = index,
-    ctx = resolved.ctx,
-    scope_state = resolved.scope_state,
-  }
+  local all = buffer_comments(resolved.ctx)
+  local comment = select_comment_at_line(all, resolved.ctx.absolute_path, resolved.ctx.bufnr, line)
+  return line_result(resolved.scope_state, resolved.ctx, comment)
 end
 
 local function find_line_comment(bufnr, line)
@@ -180,21 +210,31 @@ local function find_line_comment(bufnr, line)
     return nil, err
   end
 
-  local comment, index =
-    select_comment_at_line(resolved.scope_state.data.comments, resolved.ctx.absolute_path, bufnr, line, false)
-  return {
-    ---@type LocalReviewComment?
-    comment = comment,
-    index = index,
-    ctx = resolved.ctx,
-    scope_state = resolved.scope_state,
-  }
+  local all = buffer_comments(resolved.ctx)
+  local comment = select_comment_at_line(all, resolved.ctx.absolute_path, bufnr, line, false)
+  return line_result(resolved.scope_state, resolved.ctx, comment)
 end
 
-local function comments_in_scope(scope_root)
-  local data = storage.load_scope(scope_root)
-  table.sort(data.comments, comment_store.comment_sorter)
-  return data.comments
+---Return true if a session remote occupies any line in the range.
+---@param ctx table
+---@param line integer
+---@param line_end integer?
+---@return boolean
+local function session_remote_at_line(ctx, line, line_end)
+  local session_comments = gh_session.comments_for_path(ctx.scope_root, ctx.absolute_path, "file")
+  if #session_comments == 0 then
+    return false
+  end
+
+  local start_line = math.min(line, line_end or line)
+  local end_line = math.max(line, line_end or line)
+  for l = start_line, end_line do
+    local matches = comment_store.comments_at_line(session_comments, ctx.absolute_path, l)
+    if #matches > 0 then
+      return true
+    end
+  end
+  return false
 end
 
 function M.status_label(comment)
@@ -202,10 +242,6 @@ function M.status_label(comment)
     return "stale"
   end
   return nil
-end
-
-function M.list_scope_comments(scope_root)
-  return comments_in_scope(scope_root)
 end
 
 ---@param path string?
@@ -226,7 +262,7 @@ function M.list_comments_in_path(path)
     return nil, scope_err
   end
 
-  return storage.comments_for_path(scope_root, normalized_or_err, kind), normalized_or_err, kind, scope_root
+  return union_comments_for_path(scope_root, normalized_or_err, kind), normalized_or_err, kind, scope_root
 end
 
 function M.comments_for_buffer(bufnr, opts)
@@ -238,13 +274,7 @@ function M.comments_for_buffer(bufnr, opts)
     return {}
   end
 
-  local matches = {}
-  for _, comment in ipairs(comments_in_scope(resolved.ctx.scope_root)) do
-    if comment.absolute_path == resolved.ctx.absolute_path then
-      table.insert(matches, comment)
-    end
-  end
-  return matches
+  return buffer_comments(resolved.ctx)
 end
 
 function M.get_line_state(bufnr, line)
@@ -264,6 +294,18 @@ function M.set_line_comment(bufnr, line, body, range)
   end
 
   local trimmed = vim.trim(body or "")
+
+  local anchor_line = line
+  local line_end = nil
+  if range then
+    anchor_line = math.min(range.start_line, range.end_line)
+    line_end = math.max(range.start_line, range.end_line)
+  end
+
+  if line_state.comment and comment_store.is_remote(line_state.comment) then
+    return nil, "Remote comments are read-only"
+  end
+
   if trimmed == "" then
     if line_state.index ~= nil then
       table.remove(line_state.scope_state.data.comments, line_state.index)
@@ -277,18 +319,11 @@ function M.set_line_comment(bufnr, line, body, range)
     return "noop"
   end
 
-  local anchor_line = line
-  local line_end = nil
-  if range then
-    anchor_line = math.min(range.start_line, range.end_line)
-    line_end = math.max(range.start_line, range.end_line)
+  if session_remote_at_line(line_state.ctx, anchor_line, line_end) then
+    return nil, "Remote comments are read-only"
   end
 
   if line_state.comment then
-    if comment_store.is_remote(line_state.comment) then
-      return nil, "Remote comments are read-only"
-    end
-
     local lines = buffer_lines(line_state.ctx.bufnr)
     local resolved_line = comment_store.clamp_line(anchor_line, lines)
     local resolved_end = comment_store.clamp_line(math.max(anchor_line, line_end or anchor_line), lines)
@@ -330,6 +365,10 @@ function M.delete_line_comment(bufnr, line)
     return nil, "Unable to resolve comment target."
   end
 
+  if line_state.comment and comment_store.is_remote(line_state.comment) then
+    return nil, "Remote comments are read-only"
+  end
+
   if line_state.index == nil then
     return "missing"
   end
@@ -350,6 +389,11 @@ end
 function M.delete_current_line()
   local result = find_current_comment()
   if not result then
+    return
+  end
+
+  if result.comment and comment_store.is_remote(result.comment) then
+    vim.notify("Remote comments are read-only", vim.log.levels.WARN)
     return
   end
 
@@ -446,12 +490,25 @@ end
 
 function M.clear_path(path, opts)
   local silent = opts and opts.silent
-  local comments_in_path, target_path, kind, scope_root = M.list_comments_in_path(path)
-  if not comments_in_path then
-    vim.notify(target_path or "Failed to resolve comment scope.", vim.log.levels.WARN)
+
+  local target = path
+  if target == nil or target == "" then
+    target = context.default_export_root()
+  end
+
+  local kind, normalized_or_err = context.path_kind(target)
+  if not kind then
+    vim.notify(normalized_or_err or "Failed to resolve comment scope.", vim.log.levels.WARN)
     return
   end
 
+  local scope_root, scope_err = context.scope_root(normalized_or_err)
+  if not scope_root then
+    vim.notify(scope_err or "Failed to resolve comment scope.", vim.log.levels.WARN)
+    return
+  end
+
+  local comments_in_path = storage.comments_for_path(scope_root, normalized_or_err, kind)
   if #comments_in_path == 0 then
     if not silent then
       vim.notify("No review comments found for the selected path.", vim.log.levels.INFO)
@@ -459,10 +516,7 @@ function M.clear_path(path, opts)
     return
   end
 
-  ---@cast target_path string
-  ---@cast kind "file"|"directory"
-  ---@cast scope_root string
-  local removed, err = storage.remove_comments_for_path(scope_root, target_path, kind)
+  local removed, err = storage.remove_comments_for_path(scope_root, normalized_or_err, kind)
   if not removed then
     vim.notify(err or "Failed to clear review comments.", vim.log.levels.ERROR)
     return

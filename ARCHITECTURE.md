@@ -7,7 +7,7 @@ a module may depend on its own layer or layers below it, never upward.
 lua/local_review/
 ├── init.lua                     (presentation: keymaps + commands)
 ├── domain/        comment_store · positioning   (vim-free, busted-tested)
-├── application/   comments · export · gh_pr · gh_pr_comments · gh_pr_sync
+├── application/   comments · export · gh_pr · gh_pr_comments · gh_pr_sync · gh_session
 ├── infrastructure/ storage · context
 └── presentation/  ui · markers · telescope
 ```
@@ -21,8 +21,9 @@ application → presentation). Run it with the commit gate.
 1. **Downward only.** Presentation → application → infrastructure → domain.
 2. **No sideways edges in application.** `export` and `gh_pr` must not import `comments`;
    they compose `context` (path resolution) + `storage` (queries/mutations) + `comment_store` (rules).
-   `gh_pr_sync` is an allowed exception: it may compose `gh_pr` and `gh_pr_comments` to
-   orchestrate the `:LocalReviewGhPull` workflow.
+   `export` may also compose `gh_session` (the session store is an application-layer source of
+   remote comments). `gh_pr_sync` is an allowed exception: it may compose `gh_pr` and
+   `gh_pr_comments` to orchestrate the `:LocalReviewGhPull` workflow.
 3. **Domain never imports vim-coupled modules.** `comment_store` and `positioning` stay pure Lua
    so they run under busted without a Neovim instance. Domain functions declare preconditions
    (e.g. "paths are absolute and normalized"); infrastructure establishes them.
@@ -50,7 +51,6 @@ last-writer-wins merge, and concurrency fingerprints behind a small interface:
 
 - Reads: `load_scope`, `comments_for_path(scope_root, target_path, kind)`
 - Writes: `save_scope`, `delete_scope`, `remove_comments_for_path`, `remove_comments_by_ids`
-- Removal functions enforce the remote read-only policy: matched remote comments are always kept
 
 ### Infrastructure — `infrastructure/context.lua`
 Path and scope resolution: `normalize_path`, `path_kind`, `scope_root` (git root),
@@ -62,8 +62,8 @@ Buffer-coupled workflows: `set_line_comment`, `delete_line_comment`, `delete_cur
 flows live here.
 
 ### Application — `application/export.lua`
-Export policy and format: `get_exportable_comments` (what may be exported), agent-readable
-text, clipboard write, clear-after-export.
+Export policy and format: composes local storage + session remotes, produces
+agent-readable text, clipboard write, clear-after-export.
 
 ### Application — `application/gh_pr.lua`
 GitHub review submission: PR resolution, review prompt flow, `submit_review`,
@@ -74,10 +74,24 @@ GitHub GraphQL adapter: fetches unresolved review threads and normalizes them in
 `origin == "github"` `LocalReviewComment` values. Owns the `gh api graphql`
 system boundary.
 
+### Application — `application/gh_session.lua`
+In-memory session store for remote PR comments. Each pull replaces the whole
+per-scope set; comments are queried by branch and merged with persisted locals
+in read paths.
+
+- `set(scope_root, comments, pull_number, branch)` — wholesale replacement of the
+  session set for a scope.
+- `get(scope_root)` — raw session state for a scope.
+- `clear(scope_root)` — drop the session set.
+- `comments_for_path(scope_root, target_path, kind)` — branch-filtered query that
+  unions session remotes with the current branch; comments from other branches are
+  hidden until the matching branch is checked out.
+
 ### Application — `application/gh_pr_sync.lua`
-Read-only sync workflow: fetches via `gh_pr_comments.fetch`, reconciles against
-local storage with `comment_store.reconcile_remote`, and persists only on a
-complete, changed sync.
+Read-only sync workflow: fetches via `gh_pr_comments.fetch`, validates the
+repository metadata, and delegates wholesale replacement of the in-memory
+session set to `gh_session.set`. Failed fetches leave any existing session state
+untouched; `pull` fires `LocalReviewChanged` only after a successful sync.
 
 ### Presentation
 - `init.lua` — keymaps and `:LocalReview*` commands only; no logic beyond argument parsing
@@ -87,20 +101,24 @@ complete, changed sync.
 
 ## Invariants
 
-- **Remote comments are read-only.** `origin == "github"` comments cannot be edited, deleted,
-  submitted, or cleared by export/submit cleanup. Enforced in `comment_store` (rules) and
-  `storage` (removal policy) — not at call sites. Sync reconciliation is the designated
-  writer of remote comments; user flows (comment, delete, export, submit) remain read-only.
+- **Remote comments are session-temporal and read-only.** `origin == "github"` comments
+  are never persisted; each `:LocalReviewGhPull` wholesale-replaces the per-scope
+  session set for the current pull/branch. They cannot be edited, deleted, submitted,
+  or cleared by export/submit cleanup. Enforced in `comment_store` (rules) and
+  `comments.lua` (session-remote guards) — not at call sites.
 - **`origin` is the single discriminator.** Guards check `origin`, never `remote ~= nil`.
-- **Storage normalizes at the boundary.** Comments are created complete by `upsert_comment`; readers trust the shape. (If the plugin gains external users or the schema changes, reintroduce defaults-on-load here.)
+- **Storage normalizes at the boundary and contains only local comments.** Comments are
+  created complete by `upsert_comment`; readers trust the shape. Legacy persisted
+  remotes are filtered out on `load_scope`. (If the plugin gains external users or the
+  schema changes, reintroduce defaults-on-load here.)
 - **A comment lives in exactly one scope**: the one whose root contains its `absolute_path`.
   The same `context.scope_root` derivation is used at creation and query time.
 - **Data changes reach the UI via events, not imports.** Application modules fire
   `User`/`LocalReviewChanged` (`data = { scope_root = ... }`) after mutations; `init.lua`
   subscribes and calls `markers.refresh_scope`. Application never imports presentation.
-- **Sync atomicity.** An incomplete or failed GitHub fetch must never modify persisted
-  review state. `gh_pr_sync` loads and reconciles only after `gh_pr_comments.fetch`
-  succeeds, and writes only when `reconcile_remote` reports a change.
+- **Session comments are branch-visible.** `gh_session.comments_for_path` shows only
+  remotes whose recorded branch matches the current branch, so a stale session set
+  from a switched branch does not leak into the current buffer.
 - **`remote.resolved`, `remote.outdated`, and `stale` are independent facts.**
   `remote.resolved` reflects GitHub resolution, `remote.outdated` reflects GitHub
   diff positioning, and `stale` reflects local buffer anchoring. Sync updates the
