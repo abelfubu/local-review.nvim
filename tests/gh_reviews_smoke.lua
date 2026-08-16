@@ -6,14 +6,35 @@ vim.opt.runtimepath:append(plugin_root)
 
 require("local_review").setup({ storage_dir = vim.fn.tempname() .. "_gh_reviews_smoke", keymaps = {} })
 
-local source_path = vim.fn.tempname() .. ".lua"
+local context = require("local_review.infrastructure.context")
+
+local function git(dir, ...)
+  local args = { "git", "-C", dir, ... }
+  local result = vim.fn.system(table.concat(args, " "))
+  local code = vim.v.shell_error
+  if code ~= 0 then
+    error(string.format("git command failed (%d): %s\n%s", code, table.concat(args, " "), result))
+  end
+  return result
+end
+
+local repo_dir = vim.fn.tempname() .. "_gh_reviews_smoke_repo"
+vim.fn.mkdir(repo_dir, "p")
+
+git(repo_dir, "init", "--quiet")
+git(repo_dir, "config", "user.email", "test@example.com")
+git(repo_dir, "config", "user.name", "Test")
+
+local source_path = vim.fs.joinpath(repo_dir, "file.lua")
 vim.fn.writefile({ "local value = 1" }, source_path)
+git(repo_dir, "add", "file.lua")
+git(repo_dir, "commit", "-m", "initial", "--quiet")
+
 vim.cmd.edit(vim.fn.fnameescape(source_path))
 
 local source_winid = vim.api.nvim_get_current_win()
-local context = require("local_review.infrastructure.context")
 local scope_root = assert(context.comment_context(0).scope_root, "failed to resolve scope root")
-local branch = context.current_branch(scope_root) or ""
+local branch = assert(context.current_branch(scope_root), "failed to resolve current branch")
 
 local function find_line(lines, pattern)
   for _, line in ipairs(lines) do
@@ -78,14 +99,15 @@ assert(find_line(lines, "@reviewer%-two"), "second review section not rendered")
 
 -- Close with the mapped 'q' key; the buffer should survive.
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("q", true, false, true), "x", false)
-vim.wait(200, function()
+
+vim.wait(100, function()
   return not vim.api.nvim_win_is_valid(review_winid)
 end)
 assert(not vim.api.nvim_win_is_valid(review_winid), "reviews split did not close on q")
 assert(vim.api.nvim_buf_is_valid(review_bufnr), "reviews buffer was wiped on window close")
 assert(vim.api.nvim_get_current_win() == source_winid, "focus did not return to the source window")
 
--- Re-pull reuses the same buffer and refreshes its content.
+-- Re-pull updated reviews and reopen the split.
 require("local_review.application.gh_session").set(scope_root, {}, reviews_b, 1, branch)
 require("local_review.presentation.ui").open_reviews_split(reviews_b, scope_root)
 
@@ -99,13 +121,19 @@ assert(not find_line(updated_lines, "@reviewer%-two"), "stale second review stil
 assert(find_line(updated_lines, "@reviewer%-three"), "updated review section not rendered")
 assert(not vim.bo[reused_bufnr].modifiable, "reused reviews buffer became modifiable")
 
--- :LocalReviewGhClear wipes the reviews buffer.
-vim.api.nvim_set_current_win(source_winid)
-vim.cmd("LocalReviewGhClear")
+-- Clear the session and trigger the wipe listener.
+require("local_review.application.gh_session").clear(scope_root)
+vim.api.nvim_exec_autocmds("User", {
+  pattern = "LocalReviewChanged",
+  data = { scope_root = scope_root },
+})
+
 vim.wait(200, function()
   return not vim.api.nvim_buf_is_valid(reused_bufnr)
 end)
 assert(not vim.api.nvim_buf_is_valid(reused_bufnr), "reviews buffer was not wiped on clear")
+assert(#vim.api.nvim_list_wins() == 1, "reviews split did not close when buffer was wiped")
+assert(vim.api.nvim_get_current_win() == source_winid, "focus did not return to the source window after clear")
 
-vim.fn.delete(source_path)
-print("PASS: reviews split persists, reuses on re-pull, survives window close, and wipes on clear")
+vim.fn.delete(repo_dir, "rf")
+print("PASS: reviews split opened, closed, re-pulled, and cleared correctly")

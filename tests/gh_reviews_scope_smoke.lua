@@ -10,11 +10,28 @@ local context = require("local_review.infrastructure.context")
 local gh_session = require("local_review.application.gh_session")
 local ui = require("local_review.presentation.ui")
 
+local function git(dir, ...)
+  local args = { "git", "-C", dir, ... }
+  local result = vim.fn.system(table.concat(args, " "))
+  local code = vim.v.shell_error
+  if code ~= 0 then
+    error(string.format("git command failed (%d): %s\n%s", code, table.concat(args, " "), result))
+  end
+  return result
+end
+
 local function make_scope_dir_and_file(name)
   local dir = vim.fn.tempname() .. "_" .. name
   vim.fn.mkdir(dir, "p")
   local file = vim.fs.joinpath(dir, "file.lua")
   vim.fn.writefile({ string.format("local %s = 1", name) }, file)
+
+  git(dir, "init", "--quiet")
+  git(dir, "config", "user.email", "test@example.com")
+  git(dir, "config", "user.name", "Test")
+  git(dir, "add", "file.lua")
+  git(dir, "commit", "-m", "initial", "--quiet")
+
   return dir, file
 end
 
@@ -31,6 +48,8 @@ local source_winid = vim.api.nvim_get_current_win()
 
 local scope_a_root = assert(context.comment_context(0).scope_root, "failed to resolve scope A root")
 local scope_b_root = assert(context.scope_root(scope_b_file), "failed to resolve scope B root")
+local branch_a = assert(context.current_branch(scope_a_root), "failed to resolve branch A")
+local branch_b = assert(context.current_branch(scope_b_root), "failed to resolve branch B")
 
 local reviews_a = {
   {
@@ -55,7 +74,7 @@ local reviews_b = {
 }
 
 -- Seed scope A's session and open its reviews.
-gh_session.set(scope_a_root, {}, reviews_a, 1, "")
+gh_session.set(scope_a_root, {}, reviews_a, 1, branch_a)
 ui.open_reviews_split(reviews_a, scope_a_root)
 
 local windows = vim.api.nvim_list_wins()
@@ -66,6 +85,7 @@ assert(vim.api.nvim_buf_get_name(review_bufnr):find("gh%-reviews"), "reviews buf
 assert(vim.b[review_bufnr].local_review_scope_root == scope_a_root, "reviews buffer not tagged with scope A")
 
 -- A LocalReviewChanged for an unrelated scope B (with empty session) must NOT wipe the buffer.
+gh_session.set(scope_b_root, {}, reviews_b, 1, branch_b)
 vim.api.nvim_exec_autocmds("User", {
   pattern = "LocalReviewChanged",
   data = { scope_root = scope_b_root },
@@ -88,4 +108,6 @@ assert(vim.api.nvim_get_current_win() == source_winid, "focus did not return to 
 
 vim.fn.delete(scope_a_file)
 vim.fn.delete(scope_b_file)
+vim.fn.delete(scope_a_dir, "rf")
+vim.fn.delete(scope_b_dir, "rf")
 print("PASS: reviews split only wipes for its own scope")

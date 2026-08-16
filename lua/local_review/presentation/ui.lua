@@ -813,6 +813,40 @@ function M.active_source_line(bufnr)
   return nil
 end
 
+function M.reconcile_reviews_buffer(scope_root)
+  local bufnr = reviews_buffer()
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  if not scope_root then
+    scope_root = vim.b[bufnr].local_review_scope_root
+  end
+  if not scope_root then
+    return
+  end
+
+  local reviews = gh_session.reviews_for_scope(scope_root)
+  if not reviews or #reviews == 0 then
+    local winid = reviews_buffer_winid(bufnr)
+    if winid and vim.api.nvim_win_is_valid(winid) then
+      pcall(vim.api.nvim_win_close, winid, true)
+    end
+    pcall(function()
+      vim.cmd("silent bwipeout! " .. bufnr)
+    end)
+    return
+  end
+
+  local winid = reviews_buffer_winid(bufnr)
+  if winid and vim.api.nvim_win_is_valid(winid) then
+    local lines = reviews_lines(reviews)
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    vim.bo[bufnr].modifiable = false
+  end
+end
+
 local reviews_wipe_group = vim.api.nvim_create_augroup("local-review-reviews-wipe", { clear = true })
 vim.api.nvim_create_autocmd("User", {
   group = reviews_wipe_group,
@@ -823,8 +857,8 @@ vim.api.nvim_create_autocmd("User", {
       return
     end
 
-    local session = gh_session.get(scope_root)
-    if session and #session.reviews > 0 then
+    local reviews = gh_session.reviews_for_scope(scope_root)
+    if #reviews > 0 then
       return
     end
 
