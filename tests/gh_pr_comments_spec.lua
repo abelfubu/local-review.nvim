@@ -147,9 +147,11 @@ describe("gh_pr_comments", function()
     it("is a non-empty GraphQL string", function()
       assert.is_string(module.QUERY)
       assert.is_truthy(module.QUERY:match("reviewThreads"))
+      assert.is_truthy(module.QUERY:match("reviews"))
       assert.is_truthy(module.QUERY:match("pageInfo"))
       assert.is_truthy(module.QUERY:match("comments"))
       assert.is_truthy(module.QUERY:match("diffHunk"))
+      assert.is_truthy(module.QUERY:match("submittedAt"))
     end)
   end)
 
@@ -343,7 +345,7 @@ describe("gh_pr_comments", function()
   end)
 
   describe("fetch", function()
-    local function graphql_page(threads, has_next, cursor)
+    local function graphql_page(threads, has_next, cursor, reviews, reviews_has_next, reviews_cursor)
       return {
         data = {
           repository = {
@@ -351,6 +353,44 @@ describe("gh_pr_comments", function()
               reviewThreads = {
                 pageInfo = { hasNextPage = has_next or false, endCursor = cursor },
                 nodes = threads or {},
+              },
+              reviews = {
+                pageInfo = { hasNextPage = reviews_has_next or false, endCursor = reviews_cursor },
+                nodes = reviews or {},
+              },
+            },
+          },
+        },
+      }
+    end
+
+    local function graphql_page_without_reviews(threads, has_next, cursor)
+      return {
+        data = {
+          repository = {
+            pullRequest = {
+              reviewThreads = {
+                pageInfo = { hasNextPage = has_next or false, endCursor = cursor },
+                nodes = threads or {},
+              },
+            },
+          },
+        },
+      }
+    end
+
+    local function reviews_page(nodes, has_next, cursor)
+      return {
+        data = {
+          repository = {
+            pullRequest = {
+              reviewThreads = {
+                pageInfo = { hasNextPage = false, endCursor = nil },
+                nodes = {},
+              },
+              reviews = {
+                pageInfo = { hasNextPage = has_next or false, endCursor = cursor },
+                nodes = nodes or {},
               },
             },
           },
@@ -368,6 +408,18 @@ describe("gh_pr_comments", function()
             },
           },
         },
+      }
+    end
+
+    local function make_review(id, overrides)
+      overrides = overrides or {}
+      return {
+        id = id,
+        body = overrides.body ~= nil and overrides.body or "Review body",
+        state = overrides.state or "COMMENTED",
+        url = "https://github.com/owner/repo/pull/4#" .. id,
+        author = { login = overrides.author or "reviewer" },
+        submittedAt = overrides.submittedAt or "2024-01-01T00:00:00Z",
       }
     end
 
@@ -400,6 +452,129 @@ describe("gh_pr_comments", function()
       }
     end
 
+    it("returns PR review bodies alongside inline threads", function()
+      graphql_handler = function(_, _)
+        return graphql_page(
+          {
+            make_thread("t1"),
+          },
+          false,
+          nil,
+          {
+            make_review("review-1"),
+          }
+        )
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(1, #result)
+      assert.are.equal("gh:t1-c1", result[1].id)
+      assert.is_not_nil(result.reviews)
+      assert.are.equal(1, #result.reviews)
+      assert.is_true(result.reviews_included)
+      assert.are.equal("review-1", result.reviews[1].id)
+      assert.are.equal("Review body", result.reviews[1].body)
+      assert.are.equal("COMMENTED", result.reviews[1].state)
+      assert.are.equal("reviewer", result.reviews[1].author)
+      assert.are.equal("2024-01-01T00:00:00Z", result.reviews[1].submitted_at)
+    end)
+
+    it("paginates reviews", function()
+      local page1 = {}
+      for i = 1, 100 do
+        page1[i] = make_review("r" .. i)
+      end
+      local page2 = { make_review("r101") }
+
+      graphql_handler = function(_, variables)
+        if not variables.reviewsCursor then
+          return graphql_page({}, true, "c1", page1, true, "rc1")
+        elseif variables.reviewsCursor == "rc1" then
+          return graphql_page({}, false, nil, page2, false)
+        end
+        return {}
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(0, #result)
+      assert.are.equal(101, #result.reviews)
+      assert.is_true(result.reviews_included)
+    end)
+
+    it("errors when reviews pagination cursor does not advance", function()
+      graphql_handler = function(_, _)
+        return graphql_page({}, false, nil, { make_review("r1") }, true, "stuck")
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(result)
+      assert.is_truthy(err)
+      assert.matches("cursor did not advance", err)
+      assert.matches("reviews", err)
+    end)
+
+    it("returns a single error when reviews pagination fails mid-way", function()
+      local page1_reviews = { make_review("r1") }
+
+      graphql_handler = function(_, variables)
+        if variables.reviewsCursor == nil then
+          next_system_error = "HTTP 500: boom"
+          return graphql_page({}, false, nil, page1_reviews, true, "rc1")
+        end
+        return {}
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(result)
+      assert.is_truthy(err)
+      assert.matches("HTTP 500", err)
+    end)
+
+    it("filters reviews: drops empty body and PENDING, keeps other states", function()
+      graphql_handler = function(_, _)
+        return graphql_page({}, false, nil, {
+          make_review("empty-body", { body = "" }),
+          make_review("pending", { state = "PENDING" }),
+          make_review("approved", { state = "APPROVED", body = "LGTM" }),
+          make_review("changes", { state = "CHANGES_REQUESTED", body = "Please fix" }),
+        })
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(2, #result.reviews)
+      local ids = {}
+      for _, review in ipairs(result.reviews) do
+        ids[review.id] = true
+      end
+      assert.is_true(ids["approved"])
+      assert.is_true(ids["changes"])
+      assert.is_nil(ids["empty-body"])
+      assert.is_nil(ids["pending"])
+    end)
+
     it("returns an empty result for a PR with no review threads", function()
       next_system_result = { code = 0, stdout = vim.json.encode(graphql_page({}, false)), stderr = "" }
       local result, err
@@ -409,6 +584,47 @@ describe("gh_pr_comments", function()
       end)
       assert.is_nil(err)
       assert.are.equal(0, #result)
+      assert.is_true(result.reviews_included)
+    end)
+
+    it("sets reviews_included false when the reviews field is absent", function()
+      graphql_handler = function(_, _)
+        return graphql_page_without_reviews({
+          make_thread("t1"),
+        }, false)
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(1, #result)
+      assert.is_not_nil(result.reviews)
+      assert.are.equal(0, #result.reviews)
+      assert.is_false(result.reviews_included)
+    end)
+
+    it("sorts review bodies by submittedAt descending", function()
+      graphql_handler = function(_, _)
+        return graphql_page({ make_thread("t1") }, false, nil, {
+          make_review("older", { submittedAt = "2024-01-01T00:00:00Z" }),
+          make_review("newer", { submittedAt = "2024-03-01T00:00:00Z" }),
+          make_review("middle", { submittedAt = "2024-02-01T00:00:00Z" }),
+        })
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(3, #result.reviews)
+      assert.are.equal("newer", result.reviews[1].id)
+      assert.are.equal("middle", result.reviews[2].id)
+      assert.are.equal("older", result.reviews[3].id)
     end)
 
     it("paginates review threads", function()
