@@ -677,6 +677,88 @@ describe("gh_pr_comments", function()
       assert.matches("cursor did not advance", err)
     end)
 
+    it("does not duplicate threads when reviews paginate past a completed thread page", function()
+      local thread = make_thread("t1")
+      local reviews_page1 = {}
+      for i = 1, 100 do
+        reviews_page1[i] = make_review("r" .. i)
+      end
+      local reviews_page2 = { make_review("r101") }
+
+      graphql_handler = function(_, variables)
+        local is_threads_query = variables.pr ~= nil
+        if not is_threads_query then
+          return {}
+        end
+
+        if not variables.threadsCursor and not variables.reviewsCursor then
+          return graphql_page({ thread }, false, nil, reviews_page1, true, "rc1")
+        elseif variables.reviewsCursor == "rc1" then
+          return graphql_page({ thread }, false, nil, reviews_page2, false)
+        end
+        return {}
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(1, #result)
+      assert.are.equal("gh:t1-c1", result[1].id)
+
+      local review_ids = {}
+      for _, review in ipairs(result.reviews) do
+        assert.is_nil(review_ids[review.id])
+        review_ids[review.id] = true
+      end
+      assert.are.equal(101, #result.reviews)
+      assert.is_true(review_ids["r1"])
+      assert.is_true(review_ids["r101"])
+    end)
+
+    it("does not duplicate reviews when threads paginate past a completed review page", function()
+      local review = make_review("r1")
+      local threads_page1 = {}
+      for i = 1, 100 do
+        threads_page1[i] = make_thread("t" .. i)
+      end
+      local threads_page2 = { make_thread("t101") }
+
+      graphql_handler = function(_, variables)
+        local is_threads_query = variables.pr ~= nil
+        if not is_threads_query then
+          return {}
+        end
+
+        if not variables.threadsCursor and not variables.reviewsCursor then
+          return graphql_page(threads_page1, true, "c1", { review }, false)
+        elseif variables.threadsCursor == "c1" then
+          return graphql_page(threads_page2, false, nil, { review }, false)
+        end
+        return {}
+      end
+
+      local result, err
+      module.fetch("/repo", { number = 4 }, function(r, e)
+        result = r
+        err = e
+      end)
+      assert.is_nil(err)
+      assert.are.equal(101, #result)
+
+      local thread_ids = {}
+      for _, comment in ipairs(result) do
+        assert.is_nil(thread_ids[comment.remote.thread_id])
+        thread_ids[comment.remote.thread_id] = true
+      end
+      assert.is_true(thread_ids["t1"])
+      assert.is_true(thread_ids["t101"])
+      assert.are.equal(1, #result.reviews)
+      assert.are.equal("r1", result.reviews[1].id)
+    end)
+
     it("paginates nested comments on a thread", function()
       local thread = make_thread("t1", {
         comments = {

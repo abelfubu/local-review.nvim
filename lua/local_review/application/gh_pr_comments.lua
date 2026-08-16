@@ -356,11 +356,15 @@ local function fetch_snapshot(
   reviews_cursor,
   threads,
   reviews,
-  reviews_included
+  reviews_included,
+  threads_done,
+  reviews_done
 )
   threads = threads or {}
   reviews = reviews or {}
   reviews_included = reviews_included or false
+  threads_done = threads_done or false
+  reviews_done = reviews_done or false
 
   local out, err = run_query(scope_root, M.QUERY, {
     owner = owner,
@@ -388,16 +392,22 @@ local function fetch_snapshot(
     return nil, nil, false, "Invalid review snapshot response"
   end
 
-  local reviews_connection = pull_request.reviews
-  if reviews_connection ~= nil then
-    reviews_included = true
-    for _, node in ipairs(reviews_connection.nodes or {}) do
-      table.insert(reviews, node)
+  if not threads_done then
+    for _, node in ipairs(review_threads.nodes or {}) do
+      table.insert(threads, node)
     end
   end
 
-  for _, node in ipairs(review_threads.nodes or {}) do
-    table.insert(threads, node)
+  local reviews_connection = pull_request.reviews
+  if reviews_connection ~= nil then
+    reviews_included = true
+    if not reviews_done then
+      for _, node in ipairs(reviews_connection.nodes or {}) do
+        table.insert(reviews, node)
+      end
+    end
+  else
+    reviews_done = true
   end
 
   local threads_page_info = review_threads.pageInfo or {}
@@ -412,6 +422,8 @@ local function fetch_snapshot(
       return nil, nil, false, "Pagination cursor did not advance for review threads"
     end
     threads_cursor = next_threads_cursor
+  else
+    threads_done = true
   end
 
   if has_reviews_next then
@@ -420,6 +432,8 @@ local function fetch_snapshot(
       return nil, nil, false, "Pagination cursor did not advance for reviews"
     end
     reviews_cursor = next_reviews_cursor
+  else
+    reviews_done = true
   end
 
   if has_threads_next or has_reviews_next then
@@ -432,7 +446,9 @@ local function fetch_snapshot(
       reviews_cursor,
       threads,
       reviews,
-      reviews_included
+      reviews_included,
+      threads_done,
+      reviews_done
     )
   end
 
