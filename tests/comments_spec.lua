@@ -261,7 +261,6 @@ describe("comments", function()
   describe("comments_for_buffer", function()
     it("returns the union of local and session remote comments", function()
       scope_data.comments = { local_comment() }
-      scope_data.comments = { local_comment() }
       session_comments = { remote_comment() }
 
       local comments = module.comments_for_buffer(1)
@@ -271,7 +270,6 @@ describe("comments", function()
     end)
 
     it("returns only locals when session has no matching comments", function()
-      scope_data.comments = { local_comment() }
       scope_data.comments = { local_comment() }
 
       local comments = module.comments_for_buffer(1)
@@ -316,7 +314,6 @@ describe("comments", function()
   describe("get_line_state", function()
     it("finds a session remote on a line", function()
       scope_data.comments = {}
-      scope_data.comments = {}
       session_comments = { remote_comment() }
 
       local state = module.get_line_state(1, 5)
@@ -327,7 +324,6 @@ describe("comments", function()
     end)
 
     it("finds a local comment on a line", function()
-      scope_data.comments = { local_comment() }
       scope_data.comments = { local_comment() }
 
       local state = module.get_line_state(1, 2)
@@ -341,7 +337,6 @@ describe("comments", function()
   describe("set_line_comment", function()
     it("refuses to edit a session remote comment", function()
       scope_data.comments = {}
-      scope_data.comments = {}
       session_comments = { remote_comment() }
 
       local result, err = module.set_line_comment(1, 5, "updated")
@@ -351,7 +346,6 @@ describe("comments", function()
 
     it("refuses to create a comment on a line occupied by a session remote", function()
       scope_data.comments = {}
-      scope_data.comments = {}
       session_comments = { remote_comment() }
 
       local result, err = module.set_line_comment(1, 5, "new comment")
@@ -360,7 +354,6 @@ describe("comments", function()
     end)
 
     it("creates a local comment on an empty line", function()
-      scope_data.comments = {}
       scope_data.comments = {}
       session_comments = {}
 
@@ -373,7 +366,6 @@ describe("comments", function()
 
     it("updates an existing local comment", function()
       scope_data.comments = { local_comment() }
-      scope_data.comments = { local_comment() }
 
       local result, err = module.set_line_comment(1, 2, "updated")
       assert.is_nil(err)
@@ -385,7 +377,6 @@ describe("comments", function()
   describe("delete_line_comment", function()
     it("refuses to delete a session remote comment", function()
       scope_data.comments = {}
-      scope_data.comments = {}
       session_comments = { remote_comment() }
 
       local result, err = module.delete_line_comment(1, 5)
@@ -394,7 +385,6 @@ describe("comments", function()
     end)
 
     it("deletes a local comment", function()
-      scope_data.comments = { local_comment() }
       scope_data.comments = { local_comment() }
 
       local result, err = module.delete_line_comment(1, 2)
@@ -406,7 +396,6 @@ describe("comments", function()
 
   describe("delete_current_line", function()
     it("notifies read-only for a session remote", function()
-      scope_data.comments = {}
       scope_data.comments = {}
       session_comments = { remote_comment() }
       cursor_line = 5

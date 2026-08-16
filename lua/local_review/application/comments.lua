@@ -130,10 +130,9 @@ local function union_comments_for_path(scope_root, target_path, kind)
 end
 
 ---Return the merged comment set for a buffer (local + session remotes).
----@param scope_state table
 ---@param ctx { absolute_path: string, scope_root: string }
 ---@return LocalReviewComment[]
-local function buffer_comments(scope_state, ctx)
+local function buffer_comments(ctx)
   return union_comments_for_path(ctx.scope_root, ctx.absolute_path, "file")
 end
 
@@ -209,7 +208,7 @@ local function find_current_comment()
   end
 
   local line = current_line()
-  local all = buffer_comments(resolved.scope_state, resolved.ctx)
+  local all = buffer_comments(resolved.ctx)
   local comment = select_comment_at_line(all, resolved.ctx.absolute_path, resolved.ctx.bufnr, line)
   return line_result(resolved.scope_state, resolved.ctx, comment)
 end
@@ -220,7 +219,7 @@ local function find_line_comment(bufnr, line)
     return nil, err
   end
 
-  local all = buffer_comments(resolved.scope_state, resolved.ctx)
+  local all = buffer_comments(resolved.ctx)
   local comment = select_comment_at_line(all, resolved.ctx.absolute_path, bufnr, line, false)
   return line_result(resolved.scope_state, resolved.ctx, comment)
 end
@@ -248,21 +247,11 @@ local function session_remote_at_line(scope_state, ctx, line, line_end)
   return false
 end
 
-local function comments_in_scope(scope_root)
-  local data = storage.load_scope(scope_root)
-  table.sort(data.comments, comment_store.comment_sorter)
-  return data.comments
-end
-
 function M.status_label(comment)
   if comment and comment.stale then
     return "stale"
   end
   return nil
-end
-
-function M.list_scope_comments(scope_root)
-  return comments_in_scope(scope_root)
 end
 
 ---@param path string?
@@ -295,7 +284,7 @@ function M.comments_for_buffer(bufnr, opts)
     return {}
   end
 
-  return buffer_comments(resolved.scope_state, resolved.ctx)
+  return buffer_comments(resolved.ctx)
 end
 
 function M.get_line_state(bufnr, line)

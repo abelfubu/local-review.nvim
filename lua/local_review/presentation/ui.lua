@@ -576,7 +576,7 @@ function M.open_current_line(range)
     end_line = math.max(start_line, line_state.comment.line_end or start_line)
   end
 
-  -- Anchor the editor below the last line of the range, where the persisted
+  -- Anchor the editor below the last line of the range, where the marker
   -- comment box will be drawn once the editor closes.
   local max_line = math.max(vim.api.nvim_buf_line_count(source_bufnr), 1)
   end_line = math.max(1, math.min(end_line, max_line))
@@ -632,8 +632,8 @@ function M.open_current_line(range)
   state.editor_winid = winid
   place_editor(winid, vim.api.nvim_win_get_config(winid))
 
-  -- Hide the persisted box for the line being edited; it is drawn again by
-  -- the refresh in M.close_active().
+  -- Hide the marker comment box for the line being edited; it is drawn again
+  -- by the refresh in M.close_active().
   require("local_review.presentation.markers").refresh(source_bufnr)
 
   vim.wo[winid].wrap = true
