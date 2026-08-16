@@ -26,6 +26,13 @@ local state = {
   viewer_group = nil,
 }
 
+local hover_state = {
+  bufnr = nil,
+  winid = nil,
+  source_winid = nil,
+  group = nil,
+}
+
 local function is_valid_buffer(bufnr)
   return bufnr ~= nil and vim.api.nvim_buf_is_valid(bufnr)
 end
@@ -134,6 +141,19 @@ local function close_window()
     pcall(vim.api.nvim_win_close, state.editor_winid, true)
   end
   cleanup()
+end
+
+local function close_hover()
+  if is_valid_window(hover_state.winid) then
+    pcall(vim.api.nvim_win_close, hover_state.winid, true)
+  end
+  if hover_state.group then
+    pcall(vim.api.nvim_del_augroup_by_id, hover_state.group)
+  end
+  hover_state.bufnr = nil
+  hover_state.winid = nil
+  hover_state.source_winid = nil
+  hover_state.group = nil
 end
 
 local function persist(opts)
@@ -378,6 +398,161 @@ function M.open_remote_viewer(source_bufnr, source_winid, line)
   })
 
   pcall(vim.api.nvim_win_set_cursor, winid, { 1, 0 })
+end
+
+local function hover_lines(comments_list)
+  local lines = {}
+  for index, comment in ipairs(comments_list) do
+    local meta = {}
+    if comment.stale then
+      table.insert(meta, "stale")
+    end
+
+    if comment_store.is_remote(comment) then
+      if comment.remote and comment.remote.resolved then
+        table.insert(meta, "resolved")
+      end
+      if comment.remote and comment.remote.outdated then
+        table.insert(meta, "outdated")
+      end
+      local author = comment.remote and comment.remote.author or "unknown"
+      table.insert(lines, string.format("### @%s", author))
+    else
+      table.insert(lines, "### Review Comment")
+    end
+
+    if #meta > 0 then
+      table.insert(lines, string.format("_(%s)_", table.concat(meta, ", ")))
+    end
+
+    for _, body_line in ipairs(vim.split(comment.body or "", "\n", { plain = true })) do
+      table.insert(lines, body_line)
+    end
+
+    if index < #comments_list then
+      table.insert(lines, "---")
+      table.insert(lines, "")
+    end
+  end
+  return lines
+end
+
+function M.hover_peek(source_bufnr, source_winid, line)
+  if is_valid_window(hover_state.winid) then
+    if vim.api.nvim_get_current_win() ~= hover_state.winid then
+      -- Second K: focus the hover and stop auto-closing.
+      if hover_state.group then
+        pcall(vim.api.nvim_del_augroup_by_id, hover_state.group)
+        hover_state.group = nil
+      end
+      pcall(vim.api.nvim_set_current_win, hover_state.winid)
+      return true
+    end
+    -- Already focused: close.
+    close_hover()
+    return true
+  end
+
+  close_hover()
+
+  local line_state = comments.get_line_state(source_bufnr, line)
+  if not line_state or not line_state.ctx then
+    return false
+  end
+
+  local all_comments = comments.comments_for_buffer(source_bufnr, { silent = true })
+  local matches = comment_store.comments_at_line(all_comments, line_state.ctx.absolute_path, line)
+  if #matches == 0 then
+    return false
+  end
+
+  local h_lines = hover_lines(matches)
+
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].filetype = "markdown"
+  vim.api.nvim_buf_set_name(
+    bufnr,
+    string.format("local-review://hover-comment/%s:%d", line_state.ctx.absolute_path, line)
+  )
+  vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, h_lines)
+  vim.bo[bufnr].modifiable = false
+
+  local size = inline_dimensions({ " " }, source_winid, nil)
+  local max_height = math.floor(vim.o.lines * 0.5)
+  local height = math.min(math.max(6, #h_lines), max_height)
+  local anchor_row = vim.api.nvim_win_call(source_winid, function()
+    return vim.fn.winline()
+  end)
+
+  local winid = vim.api.nvim_open_win(bufnr, false, {
+    relative = "win",
+    win = source_winid,
+    row = anchor_row,
+    col = text_column_offset(source_winid),
+    width = size.width,
+    height = height,
+    style = "minimal",
+    border = { "┌", "─", "┐", "│", "┘", "─", "└", "│" },
+    title = " Review ",
+    title_pos = "left",
+    focusable = true,
+    noautocmd = true,
+  })
+
+  hover_state.bufnr = bufnr
+  hover_state.winid = winid
+  hover_state.source_winid = source_winid
+
+  vim.wo[winid].wrap = true
+  vim.wo[winid].linebreak = true
+  vim.wo[winid].number = false
+  vim.wo[winid].relativenumber = false
+  vim.wo[winid].signcolumn = "no"
+  vim.wo[winid].statuscolumn = " "
+  vim.wo[winid].winhighlight = "Normal:NormalFloat,FloatBorder:FloatBorder,FloatTitle:LocalReviewEditorTitle"
+
+  local ok, render = pcall(require, "render-markdown")
+  if ok and render and render.buf_enable then
+    render.buf_enable(bufnr)
+  end
+
+  local function map(modes, lhs, rhs, desc)
+    if lhs == nil or lhs == "" then
+      return
+    end
+    vim.keymap.set(modes, lhs, rhs, { buffer = bufnr, silent = true, nowait = true, desc = desc })
+  end
+
+  local opts = require("local_review").get_opts()
+  for _, keymap in ipairs(opts.comment_close_keys or {}) do
+    map(keymap.modes, keymap.key, function()
+      close_hover()
+    end, "Local Review: Close hover")
+  end
+  map("n", "<Esc>", function()
+    close_hover()
+  end, "Local Review: Close hover")
+
+  local hover_key = opts.keymaps and opts.keymaps.hover
+  map("n", hover_key, function()
+    close_hover()
+  end, "Local Review: Close hover")
+
+  local group = vim.api.nvim_create_augroup("local-review-hover-" .. bufnr, { clear = true })
+  hover_state.group = group
+  vim.api.nvim_create_autocmd({ "CursorMoved", "InsertEnter", "BufLeave" }, {
+    group = group,
+    buffer = source_bufnr,
+    once = true,
+    callback = function()
+      close_hover()
+    end,
+  })
+
+  return true
 end
 
 local function reserve_inline_space(bufnr, line, height)
