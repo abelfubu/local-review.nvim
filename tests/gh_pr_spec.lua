@@ -43,6 +43,7 @@ describe("GitHub PR reviews", function()
     package.loaded["local_review.application.gh_pr"] = nil
     package.loaded["local_review.infrastructure.storage"] = nil
     package.loaded["local_review.infrastructure.context"] = nil
+    ---@diagnostic disable-next-line: duplicate-set-field
     package.preload["local_review.infrastructure.storage"] = function()
       return {
         comments_for_path = function(_, _, _)

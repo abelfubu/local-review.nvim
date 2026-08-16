@@ -7,7 +7,7 @@ a module may depend on its own layer or layers below it, never upward.
 lua/local_review/
 ├── init.lua                     (presentation: keymaps + commands)
 ├── domain/        comment_store · positioning   (vim-free, busted-tested)
-├── application/   comments · export · gh_pr
+├── application/   comments · export · gh_pr · gh_pr_comments · gh_pr_sync
 ├── infrastructure/ storage · context
 └── presentation/  ui · markers · telescope
 ```
@@ -67,6 +67,16 @@ text, clipboard write, clear-after-export.
 GitHub review submission: PR resolution, review prompt flow, `submit_review`,
 post-submit cleanup of submitted local comments.
 
+### Application — `application/gh_pr_comments.lua`
+GitHub GraphQL adapter: fetches unresolved review threads and normalizes them into
+`origin == "github"` `LocalReviewComment` values. Owns the `gh api graphql`
+system boundary.
+
+### Application — `application/gh_pr_sync.lua`
+Read-only sync workflow: fetches via `gh_pr_comments.fetch`, reconciles against
+local storage with `comment_store.reconcile_remote`, and persists only on a
+complete, changed sync.
+
 ### Presentation
 - `init.lua` — keymaps and `:LocalReview*` commands only; no logic beyond argument parsing
 - `ui.lua` — the floating comment editor
@@ -85,6 +95,13 @@ post-submit cleanup of submitted local comments.
 - **Data changes reach the UI via events, not imports.** Application modules fire
   `User`/`LocalReviewChanged` (`data = { scope_root = ... }`) after mutations; `init.lua`
   subscribes and calls `markers.refresh_scope`. Application never imports presentation.
+- **Sync atomicity.** An incomplete or failed GitHub fetch must never modify persisted
+  review state. `gh_pr_sync` loads and reconciles only after `gh_pr_comments.fetch`
+  succeeds, and writes only when `reconcile_remote` reports a change.
+- **`remote.resolved`, `remote.outdated`, and `stale` are independent facts.**
+  `remote.resolved` reflects GitHub resolution, `remote.outdated` reflects GitHub
+  diff positioning, and `stale` reflects local buffer anchoring. Sync updates the
+  first two from GitHub but never overwrites `stale`.
 
 ## Testing strategy
 

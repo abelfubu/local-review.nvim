@@ -32,7 +32,7 @@ local function get_repo_slug(repo_root)
   return run({ "gh", "repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name' }, repo_root)
 end
 
-local function get_pr_info(repo_root)
+function M.get_pr_info(repo_root)
   local out, err = run({ "gh", "pr", "view", "--json", "number,headRefOid" }, repo_root)
   if not out then
     return nil, err
@@ -45,6 +45,10 @@ local function get_pr_info(repo_root)
 
   return decoded, nil
 end
+
+---For internal use by modules that need PR metadata but should not couple to
+---the submit-review workflow.
+M._get_pr_info = M.get_pr_info
 
 ---@param callback fun(review_type: string)
 local function prompt_review_type(callback)
@@ -137,7 +141,7 @@ function M.create_review(path, opts)
 
   local submittable_comments = get_submittable_comments(path_comments)
 
-  local pr_info, err = get_pr_info(repo_root)
+  local pr_info, err = M.get_pr_info(repo_root)
   if not pr_info then
     vim.notify(err or "No PR found for current branch. Create one first:\n  gh pr create", vim.log.levels.ERROR)
     return

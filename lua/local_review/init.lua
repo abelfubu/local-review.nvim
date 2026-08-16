@@ -139,6 +139,49 @@ function M.setup(opts)
       require("local_review.application.gh_pr").create_review(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })
 
+    command("LocalReviewGhPull", function()
+      local context = require("local_review.infrastructure.context")
+      local gh_pr = require("local_review.application.gh_pr")
+      local gh_pr_sync = require("local_review.application.gh_pr_sync")
+
+      local ctx, ctx_err = context.comment_context()
+      if not ctx then
+        vim.notify(ctx_err or "Failed to determine the review scope.", vim.log.levels.WARN)
+        return
+      end
+
+      local pr_info, pr_err = gh_pr.get_pr_info(ctx.scope_root)
+      if not pr_info then
+        vim.notify(pr_err or "No PR found for current branch.", vim.log.levels.ERROR)
+        return
+      end
+
+      gh_pr_sync.sync(ctx.scope_root, pr_info, function(ok, err, stats)
+        if not ok then
+          vim.notify("Failed to pull PR comments:\n" .. (err or "Unknown error"), vim.log.levels.ERROR)
+          return
+        end
+
+        if stats and (stats.inserted > 0 or stats.updated > 0 or stats.resolved > 0) then
+          vim.notify(
+            string.format(
+              "Pulled PR comments: %d new, %d updated, %d resolved",
+              stats.inserted,
+              stats.updated,
+              stats.resolved
+            ),
+            vim.log.levels.INFO
+          )
+          vim.api.nvim_exec_autocmds("User", {
+            pattern = "LocalReviewChanged",
+            data = { scope_root = ctx.scope_root },
+          })
+        else
+          vim.notify("No new PR comments.", vim.log.levels.INFO)
+        end
+      end)
+    end, {})
+
     command("LocalReviewExport", function(command_opts)
       require("local_review.application.export").open_export(command_opts.args, { clear_after_export = true })
     end, { nargs = "?" })

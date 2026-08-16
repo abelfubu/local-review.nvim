@@ -600,3 +600,214 @@ describe("comment_store.matching_path / partitions", function()
     assert.are.equal("a", kept[1].id)
   end)
 end)
+
+describe("comment_store remote identity and reconcile", function()
+  local function remote_comment(overrides)
+    local comment = {
+      id = "gh:comment-1",
+      origin = "github",
+      absolute_path = "/repo/src/a.lua",
+      relative_path = "src/a.lua",
+      body = "reviewer note",
+      created_at = "2024-01-01T00:00:00Z",
+      updated_at = "2024-01-01T00:00:00Z",
+      anchor = { line_number = 5, line_text = "old text" },
+      anchor_end = nil,
+      line_end = 5,
+      source_kind = "github",
+      source_meta = {},
+      stale = false,
+      remote = {
+        repository = "owner/repo",
+        pull_number = 42,
+        thread_id = "thread-1",
+        comment_id = "comment-1",
+        review_id = "review-1",
+        author = "reviewer",
+        url = "https://github.com/owner/repo/pull/42#discussion_r1",
+        commit_id = "abc123",
+        resolved = false,
+        outdated = false,
+      },
+    }
+
+    if overrides then
+      for key, value in pairs(overrides) do
+        if key == "remote" and type(value) == "table" then
+          for rkey, rvalue in pairs(value) do
+            comment.remote[rkey] = rvalue
+          end
+        else
+          comment[key] = value
+        end
+      end
+    end
+
+    return comment
+  end
+
+  local function local_comment(overrides)
+    local comment = {
+      id = "local-1",
+      origin = "local",
+      absolute_path = "/repo/src/a.lua",
+      relative_path = "src/a.lua",
+      body = "local note",
+      created_at = "2024-01-01T00:00:00Z",
+      updated_at = "2024-01-01T00:00:00Z",
+      anchor = { line_number = 3, line_text = "local line" },
+      line_end = 3,
+      source_kind = "local",
+      source_meta = {},
+      stale = false,
+    }
+
+    if overrides then
+      for key, value in pairs(overrides) do
+        comment[key] = value
+      end
+    end
+
+    return comment
+  end
+
+  local scope = { repository = "owner/repo", pull_number = 42 }
+
+  it("remote_identity returns the identity tuple", function()
+    local comment = remote_comment()
+    local identity = comment_store.remote_identity(comment)
+
+    assert.are.equal("owner/repo", identity.repository)
+    assert.are.equal(42, identity.pull_number)
+    assert.are.equal("thread-1", identity.thread_id)
+    assert.are.equal("comment-1", identity.comment_id)
+  end)
+
+  it("remote_identity returns nil for local comments", function()
+    assert.is_nil(comment_store.remote_identity(local_comment()))
+  end)
+
+  it("same_remote is true only when the full identity matches", function()
+    local a = remote_comment()
+    local b = remote_comment()
+    assert.is_true(comment_store.same_remote(a, b))
+
+    local different_repo = remote_comment({ remote = { repository = "other/repo" } })
+    assert.is_false(comment_store.same_remote(a, different_repo))
+
+    local different_thread = remote_comment({ remote = { thread_id = "thread-2" } })
+    assert.is_false(comment_store.same_remote(a, different_thread))
+
+    local different_comment = remote_comment({ remote = { comment_id = "comment-2" } })
+    assert.is_false(comment_store.same_remote(a, different_comment))
+
+    assert.is_false(comment_store.same_remote(a, local_comment()))
+    assert.is_false(comment_store.same_remote(local_comment(), a))
+  end)
+
+  it("reconcile_remote leaves local comments untouched", function()
+    local existing = { local_comment() }
+    local fetched = { remote_comment() }
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal("local-1", result.comments[1].id)
+    assert.are.equal("local note", result.comments[1].body)
+    assert.are.equal(2, #result.comments)
+  end)
+
+  it("reconcile_remote leaves remote comments from other PRs untouched", function()
+    local other = remote_comment({ remote = { repository = "other/repo", pull_number = 1 } })
+    local existing = { other }
+    local fetched = {}
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_false(result.changed)
+    assert.are.equal(1, #result.comments)
+    assert.are.equal("gh:comment-1", result.comments[1].id)
+    assert.is_false(result.comments[1].remote.resolved)
+  end)
+
+  it("reconcile_remote updates matched comments in place", function()
+    local existing = { remote_comment() }
+    local fetched = { remote_comment({ body = "updated note", remote = { commit_id = "def456" } }) }
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal(1, #result.comments)
+    assert.are.equal("updated note", result.comments[1].body)
+    assert.are.equal("def456", result.comments[1].remote.commit_id)
+    assert.are.equal("gh:comment-1", result.comments[1].id)
+  end)
+
+  it("reconcile_remote adopts fetched position but preserves local anchor text", function()
+    local existing = { remote_comment({ anchor = { line_number = 5, line_text = "buffer text" } }) }
+    local fetched = { remote_comment({ anchor = { line_number = 7, line_text = "hunk text" } }) }
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal(7, result.comments[1].anchor.line_number)
+    assert.are.equal("buffer text", result.comments[1].anchor.line_text)
+  end)
+
+  it("reconcile_remote inserts new remote comments", function()
+    local existing = {}
+    local fetched = { remote_comment(), remote_comment({ id = "gh:comment-2", remote = { comment_id = "comment-2" } }) }
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal(2, #result.comments)
+  end)
+
+  it("reconcile_remote marks existing comments resolved when absent from fetched", function()
+    local existing = { remote_comment() }
+    local fetched = {}
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.is_true(result.comments[1].remote.resolved)
+    assert.are.equal("gh:comment-1", result.comments[1].id)
+  end)
+
+  it("reconcile_remote never deletes comments during sync", function()
+    local existing = { remote_comment(), local_comment() }
+    local fetched = {}
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_true(result.changed)
+    assert.are.equal(2, #result.comments)
+  end)
+
+  it("reconcile_remote preserves locals and other-PR remotes on empty snapshot", function()
+    local other = remote_comment({ remote = { repository = "other/repo" } })
+    local existing = { local_comment(), remote_comment({ remote = { resolved = true } }), other }
+    local fetched = {}
+
+    local result = comment_store.reconcile_remote(existing, fetched, scope)
+
+    assert.is_false(result.changed)
+    assert.are.equal(3, #result.comments)
+    assert.are.equal("local-1", result.comments[1].id)
+    assert.is_true(result.comments[2].remote.resolved)
+    assert.is_false(result.comments[3].remote.resolved)
+  end)
+
+  it("reconcile_remote is idempotent when the snapshot does not change", function()
+    local existing = { remote_comment() }
+    local fetched = { remote_comment() }
+
+    local first = comment_store.reconcile_remote(existing, fetched, scope)
+    assert.is_false(first.changed)
+
+    local second = comment_store.reconcile_remote(first.comments, fetched, scope)
+    assert.is_false(second.changed)
+    assert.are.same(first.comments, second.comments)
+  end)
+end)

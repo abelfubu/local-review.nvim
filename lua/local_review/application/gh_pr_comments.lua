@@ -374,9 +374,13 @@ local function fetch_threads(scope_root, owner, repo, pr, cursor, threads)
   return threads
 end
 
+---@class FetchedRemoteComments
+---@field repository string
+---@field [integer] LocalReviewComment
+
 ---@param scope_root string
 ---@param pr_info { number: integer }
----@param callback fun(threads: table[]?, err: string?)
+---@param callback fun(fetched: FetchedRemoteComments?, err: string?)
 function M.fetch(scope_root, pr_info, callback)
   local repo_slug, slug_err = get_repo_slug(scope_root)
   if not repo_slug then
@@ -428,6 +432,7 @@ function M.fetch(scope_root, pr_info, callback)
     end
   end
 
+  result.repository = repo_slug
   callback(result, nil)
 end
 
