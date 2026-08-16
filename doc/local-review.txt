@@ -49,8 +49,9 @@ number, so they follow the code when the file changes. See
       },
     })
 <
-All fields are optional. Keymaps left empty or set to `false` are not created.
-`keymaps.hover = false` disables the hover mapping.
+All fields are optional. Absent keys keep their defaults; a keymap is only
+disabled by setting its value to "" or `false` (an empty `keymaps = {}` table
+does NOT disable defaults). `keymaps.hover = false` disables the hover mapping.
 
 ==============================================================================
 3. COMMANDS                                             *local-review-commands*
