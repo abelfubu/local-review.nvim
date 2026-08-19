@@ -93,8 +93,6 @@ local function to_github_comment(c)
   return entry
 end
 
----@param path string?
----@param opts table
 ---List the file paths changed in the current branch's PR.
 ---@param repo_root string
 ---@return string[]? files, string? error
@@ -106,6 +104,8 @@ local function get_pr_files(repo_root)
   return vim.split(out, "\n", { trimempty = true })
 end
 
+---@param path string?
+---@param opts table
 function M.create_review(path, opts)
   local target = path
   if target == nil or target == "" then
