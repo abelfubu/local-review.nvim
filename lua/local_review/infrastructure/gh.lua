@@ -3,10 +3,15 @@ local M = {}
 ---Run a `gh` (or any other) CLI command and return its trimmed stdout.
 ---@param command string[]
 ---@param cwd string?
+---@param opts { env: table<string,string>? }?
 ---@return string? output, string? error
-function M.run(command, cwd)
+function M.run(command, cwd, opts)
   local timeout_ms = 30000
-  local ok, proc = pcall(vim.system, command, { cwd = cwd, text = true })
+  local sys_opts = { cwd = cwd, text = true }
+  if opts and opts.env then
+    sys_opts.env = opts.env
+  end
+  local ok, proc = pcall(vim.system, command, sys_opts)
   if not ok then
     return nil, vim.trim(tostring(proc))
   end

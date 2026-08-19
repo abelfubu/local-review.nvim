@@ -324,20 +324,28 @@ function M.set_line_comment(bufnr, line, body, range)
   end
 
   if line_state.comment then
+    -- line_state.comment comes from a separate load_scope() deep copy than
+    -- scope_state.data.comments; mutating it would not touch the persisted
+    -- table. Write through to the stored entry (located by id) instead.
+    local stored = line_state.index and line_state.scope_state.data.comments[line_state.index] or nil
+    if not stored then
+      return nil, "Failed to locate the stored review comment."
+    end
+
     local lines = buffer_lines(line_state.ctx.bufnr)
     local resolved_line = comment_store.clamp_line(anchor_line, lines)
     local resolved_end = comment_store.clamp_line(math.max(anchor_line, line_end or anchor_line), lines)
 
-    line_state.comment.body = trimmed
-    line_state.comment.updated_at = now()
-    line_state.comment.absolute_path = line_state.ctx.absolute_path
-    line_state.comment.relative_path = line_state.ctx.relative_path
-    comment_store.apply_anchor(line_state.comment, positioning.capture, lines, resolved_line)
-    line_state.comment.line_end = resolved_end
+    stored.body = trimmed
+    stored.updated_at = now()
+    stored.absolute_path = line_state.ctx.absolute_path
+    stored.relative_path = line_state.ctx.relative_path
+    comment_store.apply_anchor(stored, positioning.capture, lines, resolved_line)
+    stored.line_end = resolved_end
     if resolved_end > resolved_line then
-      comment_store.apply_anchor_end(line_state.comment, positioning.capture, lines, resolved_end)
+      comment_store.apply_anchor_end(stored, positioning.capture, lines, resolved_end)
     else
-      line_state.comment.anchor_end = nil
+      stored.anchor_end = nil
     end
 
     local ok, persist_err = persist_scope_state(line_state.ctx.scope_root, line_state.scope_state.data)

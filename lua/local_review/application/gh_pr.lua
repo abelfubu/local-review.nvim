@@ -93,6 +93,17 @@ local function to_github_comment(c)
   return entry
 end
 
+---List the file paths changed in the current branch's PR.
+---@param repo_root string
+---@return string[]? files, string? error
+local function get_pr_files(repo_root)
+  local out, err = gh.run({ "gh", "pr", "view", "--json", "files", "-q", ".files[].path" }, repo_root)
+  if not out then
+    return nil, err
+  end
+  return vim.split(out, "\n", { trimempty = true })
+end
+
 ---@param path string?
 ---@param opts table
 function M.create_review(path, opts)
@@ -130,6 +141,34 @@ function M.create_review(path, opts)
     return
   end
 
+  -- GitHub rejects the whole review (422 "Path could not be resolved") if any
+  -- comment targets a file that is not part of the PR diff. Fail fast instead.
+  local pr_files, files_err = get_pr_files(repo_root)
+  if not pr_files then
+    vim.notify(files_err or "Failed to list PR files.", vim.log.levels.ERROR)
+    return
+  end
+
+  local in_diff = {}
+  for _, p in ipairs(pr_files) do
+    in_diff[p] = true
+  end
+  local outside = {}
+  for _, c in ipairs(submittable_comments) do
+    if not in_diff[c.relative_path] then
+      outside[c.relative_path] = true
+    end
+  end
+  if next(outside) then
+    local paths = vim.tbl_keys(outside)
+    table.sort(paths)
+    vim.notify(
+      "Some comments target files that are not in the PR diff:\n  " .. table.concat(paths, "\n  "),
+      vim.log.levels.ERROR
+    )
+    return
+  end
+
   prompt_review_type(function(event)
     prompt_review_body(event, function(_, body)
       local ok, submit_err = M.submit_review(submittable_comments, event, body, pr_info, repo_root)
@@ -156,6 +195,76 @@ function M.create_review(path, opts)
       end
     end)
   end)
+end
+---Pull the real GitHub error out of `gh api --verbose` stderr. On failure,
+---gh prints only "gh: <message> (HTTP <code>)"; the response body (with the
+---`errors` array explaining *why* a 422 happened) only shows up in verbose logs.
+---@param stderr string?
+---@return string?
+local function extract_api_error(stderr)
+  if not stderr then
+    return nil
+  end
+
+  local function format_decoded(decoded)
+    local parts = {}
+    if type(decoded.message) == "string" and decoded.message ~= "" then
+      table.insert(parts, decoded.message)
+    end
+    for _, e in ipairs(decoded.errors or {}) do
+      if type(e) == "table" then
+        table.insert(
+          parts,
+          vim.trim(string.format("%s %s %s", e.resource or "", e.field or "", e.message or e.code or ""))
+        )
+      else
+        table.insert(parts, tostring(e))
+      end
+    end
+    if #parts > 0 then
+      return table.concat(parts, "\n")
+    end
+    return nil
+  end
+
+  -- GH_DEBUG=api dumps the response body either compact on one line
+  -- (sometimes glued to other log text, e.g. `{"message":...}gh: ...`), or
+  -- pretty-printed across multiple lines. Handle both.
+  local buffer, depth = nil, 0
+  for line in stderr:gmatch("[^\r\n]+") do
+    if buffer then
+      buffer = buffer .. line
+      local opens = select(2, line:gsub("{", ""))
+      local closes = select(2, line:gsub("}", ""))
+      depth = depth + opens - closes
+      if depth <= 0 then
+        local ok, decoded = pcall(vim.json.decode, buffer)
+        if ok and type(decoded) == "table" then
+          local formatted = format_decoded(decoded)
+          if formatted then
+            return formatted
+          end
+        end
+        buffer, depth = nil, 0
+      end
+    elseif vim.trim(line) == "{" then
+      buffer, depth = "{", 1
+    else
+      local start = line:find("{")
+      local candidate = start and line:sub(start):match("^(%b{})") or nil
+      if candidate then
+        local ok, decoded = pcall(vim.json.decode, candidate)
+        if ok and type(decoded) == "table" then
+          local formatted = format_decoded(decoded)
+          if formatted then
+            return formatted
+          end
+        end
+      end
+    end
+  end
+
+  return nil
 end
 
 function M.submit_review(path_comments, event, body, pr_info, repo_root)
@@ -197,12 +306,22 @@ function M.submit_review(path_comments, event, body, pr_info, repo_root)
       "POST",
       "--input",
       tmpfile,
-    }, repo_root)
+    }, repo_root, { env = { GH_DEBUG = "api" } })
   end
   os.remove(tmpfile)
 
   if not result then
-    return nil, submit_err or repo_err or "Unknown error"
+    local detail = extract_api_error(submit_err)
+    if detail then
+      return nil, detail
+    end
+    -- No parseable body: show the tail of the raw gh output for debugging.
+    local lines = vim.split(submit_err or "", "\n", { trimempty = true })
+    local tail = {}
+    for i = math.max(1, #lines - 10), #lines do
+      table.insert(tail, lines[i])
+    end
+    return nil, "gh api failed (no error body parsed). Raw output:\n" .. table.concat(tail, "\n")
   end
 
   return true
