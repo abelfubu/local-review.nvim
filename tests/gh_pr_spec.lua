@@ -111,7 +111,13 @@ describe("GitHub PR reviews", function()
         elseif command[1] == "gh" and command[2] == "repo" then
           stdout = "owner/repo\n"
         elseif command[1] == "gh" and command[2] == "pr" and command[3] == "view" then
-          stdout = command[5] == "number" and "42\n" or '{"number":42,"headRefOid":"pr-head"}'
+          if command[5] == "number" then
+            stdout = "42\n"
+          elseif command[5] == "files" then
+            stdout = "lua/example.lua\n"
+          else
+            stdout = '{"number":42,"headRefOid":"pr-head"}'
+          end
         end
         return {
           wait = function()
