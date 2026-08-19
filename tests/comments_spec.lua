@@ -126,11 +126,24 @@ describe("comments", function()
       }
     end
 
+    ---Deep copy matching the real storage.load_scope contract: every call
+    ---hands out detached tables, so writes must go through save_scope.
+    local function deep_copy(value)
+      if type(value) ~= "table" then
+        return value
+      end
+      local copy = {}
+      for k, v in pairs(value) do
+        copy[deep_copy(k)] = deep_copy(v)
+      end
+      return copy
+    end
+
     ---@diagnostic disable-next-line: duplicate-set-field
     package.preload["local_review.infrastructure.storage"] = function()
       return {
         load_scope = function(_)
-          return scope_data
+          return deep_copy(scope_data)
         end,
         save_scope = function(scope_root, data)
           scope_data = data
@@ -140,7 +153,7 @@ describe("comments", function()
           local matches = {}
           for _, comment in ipairs(scope_data.comments) do
             if kind == "file" and comment.absolute_path == target_path then
-              table.insert(matches, comment)
+              table.insert(matches, deep_copy(comment))
             elseif kind == "directory" and comment.absolute_path:sub(1, #target_path + 1) == target_path .. "/" then
               table.insert(matches, comment)
             end
@@ -218,7 +231,7 @@ describe("comments", function()
       line_end = overrides.line_end or 2,
       source_kind = "buffer",
       source_meta = {},
-      stale = false,
+      stale = overrides.stale == nil and false or overrides.stale,
     }
   end
 
@@ -371,6 +384,16 @@ describe("comments", function()
       assert.is_nil(err)
       assert.are.equal("updated", result)
       assert.are.equal("updated", scope_data.comments[1].body)
+    end)
+
+    it("clears stale when editing a stale comment", function()
+      scope_data.comments = { local_comment({ stale = true }) }
+
+      local result, err = module.set_line_comment(1, 2, "updated")
+      assert.is_nil(err)
+      assert.are.equal("updated", result)
+      assert.are.equal("updated", scope_data.comments[1].body)
+      assert.are.equal(false, scope_data.comments[1].stale)
     end)
   end)
 

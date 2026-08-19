@@ -18,6 +18,8 @@ describe("GitHub PR reviews", function()
   local review_choice
   local notifications
   local remote_pr_info
+  local pr_files_stdout
+  local api_error
 
   before_each(function()
     processes = {}
@@ -27,6 +29,8 @@ describe("GitHub PR reviews", function()
     remove_err = nil
     notifications = {}
     remote_pr_info = { number = 42, headRefOid = "pr-head" }
+    pr_files_stdout = "lua/example.lua\n"
+    api_error = nil
     summary_input = nil
     review_choice = "Comment"
     path_comments = {
@@ -86,9 +90,42 @@ describe("GitHub PR reviews", function()
       trim = function(value)
         return value:match("^%s*(.-)%s*$")
       end,
+      split = function(value, sep, opts)
+        local parts = {}
+        local pos = 1
+        while true do
+          local s, e = value:find(sep, pos, true)
+          if not s then
+            parts[#parts + 1] = value:sub(pos)
+            break
+          end
+          parts[#parts + 1] = value:sub(pos, s - 1)
+          pos = e + 1
+        end
+        if opts and opts.trimempty then
+          local kept = {}
+          for _, p in ipairs(parts) do
+            if p ~= "" then
+              kept[#kept + 1] = p
+            end
+          end
+          return kept
+        end
+        return parts
+      end,
+      tbl_keys = function(t)
+        local keys = {}
+        for k in pairs(t) do
+          keys[#keys + 1] = k
+        end
+        return keys
+      end,
       json = {
-        decode = function()
-          return remote_pr_info
+        decode = function(value)
+          if type(value) == "string" and value:find("headRefOid") then
+            return remote_pr_info
+          end
+          return require("dkjson").decode(value)
         end,
         encode = function(payload)
           encoded_payload = payload
@@ -104,8 +141,10 @@ describe("GitHub PR reviews", function()
         end,
       },
       system = function(command, opts)
-        processes[#processes + 1] = { command = command, cwd = opts and opts.cwd }
+        processes[#processes + 1] = { command = command, cwd = opts and opts.cwd, env = opts and opts.env }
         local stdout = "ok"
+        local code = 0
+        local stderr = ""
         if command[1] == "git" then
           stdout = "local-head\n"
         elseif command[1] == "gh" and command[2] == "repo" then
@@ -114,14 +153,18 @@ describe("GitHub PR reviews", function()
           if command[5] == "number" then
             stdout = "42\n"
           elseif command[5] == "files" then
-            stdout = "lua/example.lua\n"
+            stdout = pr_files_stdout
           else
             stdout = '{"number":42,"headRefOid":"pr-head"}'
           end
+        elseif command[1] == "gh" and command[2] == "api" and api_error then
+          code = 1
+          stdout = ""
+          stderr = api_error
         end
         return {
           wait = function()
-            return { code = 0, stdout = stdout, stderr = "" }
+            return { code = code, stdout = stdout, stderr = stderr }
           end,
         }
       end,
@@ -146,7 +189,7 @@ describe("GitHub PR reviews", function()
     require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
     -- One command is used to discover the PR before prompting.
-    assert.are.equal(1, #processes)
+    assert.are.equal(2, #processes) -- PR info + PR files discovery
   end)
 
   it("excludes remote comments from the submitted review", function()
@@ -220,7 +263,7 @@ describe("GitHub PR reviews", function()
 
     require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
-    assert.are.equal(1, #processes)
+    assert.are.equal(2, #processes) -- PR info + PR files discovery
     assert.is_nil(removed_ids)
   end)
 
@@ -230,7 +273,7 @@ describe("GitHub PR reviews", function()
 
     require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
-    assert.are.equal(1, #processes)
+    assert.are.equal(2, #processes) -- PR info + PR files discovery
     assert.is_nil(removed_ids)
   end)
 
@@ -252,8 +295,66 @@ describe("GitHub PR reviews", function()
 
     require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
 
-    assert.are.equal(1, #processes)
+    assert.are.equal(2, #processes) -- PR info + PR files discovery
     assert.are.equal("Failed to create PR review:\nPR head commit is missing", notifications[#notifications].message)
+    assert.is_nil(removed_ids)
+  end)
+
+  it("submits the review with GH_DEBUG=api for diagnostics", function()
+    summary_input = "Review summary"
+
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
+
+    local api_call
+    for _, process in ipairs(processes) do
+      if process.command[1] == "gh" and process.command[2] == "api" then
+        api_call = process
+      end
+    end
+    assert.is_not_nil(api_call)
+    assert.is_not_nil(api_call.env)
+    assert.are.equal("api", api_call.env.GH_DEBUG)
+  end)
+
+  it("rejects comments on files outside the PR diff", function()
+    pr_files_stdout = "lua/other.lua\n"
+
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
+
+    assert.are.equal(
+      "Some comments target files that are not in the PR diff:\n  lua/example.lua",
+      notifications[#notifications].message
+    )
+    assert.are.equal(vim.log.levels.ERROR, notifications[#notifications].level)
+    for _, process in ipairs(processes) do
+      assert.is_false(process.command[1] == "gh" and process.command[2] == "api")
+    end
+    assert.is_nil(removed_ids)
+  end)
+
+  it("surfaces the GitHub error body when the review submission fails", function()
+    summary_input = "Review summary"
+    api_error = table.concat({
+      "< HTTP/2.0 422 Unprocessable Entity",
+      "",
+      "{",
+      '  "message": "Unprocessable Entity",',
+      '  "errors": [',
+      '    "Path could not be resolved"',
+      "  ],",
+      '  "status": "422"',
+      "}",
+      "",
+      "* Request took 535ms",
+      "gh: Unprocessable Entity (HTTP 422)",
+    }, "\n")
+
+    require("local_review.application.gh_pr").create_review(nil, { clear_after_export = true })
+
+    local message = notifications[#notifications].message
+    assert.is_true(message:find("Failed to create PR review:", 1, true) ~= nil)
+    assert.is_true(message:find("Unprocessable Entity", 1, true) ~= nil)
+    assert.is_true(message:find("Path could not be resolved", 1, true) ~= nil)
     assert.is_nil(removed_ids)
   end)
 end)

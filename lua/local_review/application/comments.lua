@@ -347,8 +347,6 @@ function M.set_line_comment(bufnr, line, body, range)
     else
       stored.anchor_end = nil
     end
-    -- The edit re-anchors the comment on current buffer content.
-    stored.stale = nil
 
     local ok, persist_err = persist_scope_state(line_state.ctx.scope_root, line_state.scope_state.data)
     if not ok then
