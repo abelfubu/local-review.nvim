@@ -65,24 +65,150 @@ local function list_comments(path)
   end
 
   local items = {}
+  local file_lines_cache = {}
   for _, comment in ipairs(path_comments) do
     local summary = vim.trim((comment.body or ""):gsub("%s+", " "))
     local start_line = comment.anchor.line_number
-    local end_line = comment.line_end
+    local filename = comment.absolute_path
+
+    local lines = file_lines_cache[filename]
+    if lines == nil then
+      local ok, read_lines = pcall(vim.fn.readfile, filename)
+      lines = ok and read_lines or false
+      file_lines_cache[filename] = lines
+    end
+
+    local raw_end_line = comment.line_end or start_line
+    local end_line = raw_end_line
+    local preview_start_line = start_line
+    local preview_end_line = end_line
+    local end_pos = nil
+    if lines and type(lines) == "table" then
+      local line_count = #lines
+      preview_start_line = math.min(math.max(1, start_line), line_count)
+      preview_end_line = math.min(math.max(1, raw_end_line), line_count)
+      if preview_end_line >= 1 then
+        end_pos = { preview_end_line, #lines[preview_end_line] }
+      end
+    end
+
     local range_suffix = ""
     if end_line and end_line ~= start_line then
       range_suffix = string.format(" [lines %d-%d]", start_line, end_line)
     end
     items[#items + 1] = {
-      filename = comment.absolute_path,
+      filename = filename,
+      file = filename,
       lnum = math.max(1, start_line),
+      line = math.max(1, start_line),
       col = 1,
-      text = (comment.stale and "[stale] " or "") .. summary .. range_suffix,
+      pos = { preview_start_line, 0 },
+      end_pos = end_pos,
+      text = summary,
+      body = comment.body,
+      start_line = start_line,
+      end_line = end_line,
+      stale = comment.stale,
     }
   end
 
-  vim.fn.setqflist({}, " ", { title = "Local Review Comments", items = items })
-  vim.cmd("copen")
+  local icons = {
+    file = " ",
+    lines = " ",
+    stale = " ",
+    comment = " ",
+    empty = " ",
+  }
+
+  local function file_icon(filename)
+    local ok, devicons = pcall(require, "nvim-web-devicons")
+    if not ok or not devicons then
+      return icons.file
+    end
+    local icon, hl =
+      devicons.get_icon(vim.fn.fnamemodify(filename, ":t"), vim.fn.fnamemodify(filename, ":e"), { default = true })
+    return icon and (icon .. " ") or icons.file, hl
+  end
+
+  local function format_range(item)
+    if item.end_line and item.end_line ~= item.start_line then
+      return string.format("%d-%d", item.start_line, item.end_line)
+    end
+    return tostring(item.start_line)
+  end
+
+  local function preview_comment(item)
+    local preview = {}
+    local icon = (file_icon(item.filename))
+    local header = string.format(
+      "%s%s:%s  %s",
+      icon,
+      vim.fn.fnamemodify(item.filename, ":~:."),
+      format_range(item),
+      item.stale and (icons.stale .. "stale") or ""
+    )
+    table.insert(preview, header)
+    table.insert(preview, "")
+    local body = item.body or ""
+    if vim.trim(body) == "" then
+      table.insert(preview, icons.empty .. " *No comment text*")
+    else
+      table.insert(preview, icons.comment .. "**Comment**")
+      table.insert(preview, "")
+      for _, line in ipairs(vim.split(body, "\n", { plain = true })) do
+        table.insert(preview, "> " .. line)
+      end
+    end
+    return { kind = "markdown", content = preview }
+  end
+
+  vim.ui.select(items, {
+    prompt = "Local Review Comments ",
+    ---@diagnostic disable: redundant-parameter, return-type-mismatch
+    format_item = function(item, supports_chunks)
+      local icon, icon_hl = file_icon(item.filename)
+      local stale_prefix = item.stale and (icons.stale .. " ") or ""
+      local path_range = vim.fn.fnamemodify(item.filename, ":~:.") .. ":" .. format_range(item)
+      if supports_chunks then
+        return {
+          { icon, icon_hl },
+          { " " .. path_range .. "  ", nil },
+          { stale_prefix .. item.text, nil },
+        }
+      end
+      return string.format("%s%s  %s%s", icon, path_range, stale_prefix, item.text)
+    end,
+    ---@diagnostic enable: redundant-parameter, return-type-mismatch
+    preview_item = function(item)
+      return preview_comment(item)
+    end,
+    snacks = {
+      layout = { preset = "default" },
+    },
+  }, function(choice)
+    if not choice then
+      return
+    end
+    if vim.fn.filereadable(choice.filename) == 0 then
+      vim.notify(string.format("File no longer exists: %s", choice.filename), vim.log.levels.WARN)
+      return
+    end
+    vim.cmd.edit(vim.fn.fnameescape(choice.filename))
+    local max_line = math.max(vim.api.nvim_buf_line_count(0), 1)
+    local start_line = math.max(1, math.min(choice.start_line, max_line))
+    local end_line = choice.end_line and math.max(1, math.min(choice.end_line, max_line)) or start_line
+    if end_line < start_line then
+      end_line = start_line
+    end
+    vim.api.nvim_win_set_cursor(0, { start_line, 0 })
+    vim.cmd("normal! V")
+    if end_line > start_line then
+      vim.cmd("normal! " .. (end_line - start_line) .. "j")
+    end
+    if choice.stale then
+      vim.notify("This review comment is stale and may no longer point at the original code.", vim.log.levels.WARN)
+    end
+  end)
 end
 
 function M.setup(opts)
