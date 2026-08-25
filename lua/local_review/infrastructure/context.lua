@@ -117,6 +117,18 @@ function M.scope_root(path)
 end
 
 function M.default_export_root()
+  -- If the current buffer is a real file inside a scope, default to that
+  -- scope rather than the (possibly unrelated) working directory. This lets
+  -- users open nvim in a parent directory and still export/clear the repo of
+  -- the file they are reviewing.
+  local buf_path = vim.api.nvim_buf_get_name(0)
+  if buf_path ~= "" and not buf_path:match("^%a[%w+%.%-]*://") then
+    local buf_scope_root = M.scope_root(buf_path)
+    if buf_scope_root then
+      return buf_scope_root
+    end
+  end
+
   local cwd = normalize(vim.fn.getcwd())
   return M.repo_root(cwd) or cwd
 end

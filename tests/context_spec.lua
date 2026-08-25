@@ -159,3 +159,105 @@ describe("context.current_branch cache", function()
     assert.are.equal(4, #system_calls)
   end)
 end)
+
+describe("context.default_export_root", function()
+  before_each(function()
+    package.loaded["local_review.infrastructure.context"] = nil
+
+    _G.vim = {
+      fs = {
+        normalize = function(path)
+          return path
+        end,
+      },
+      api = {
+        nvim_buf_get_name = function(_)
+          return "/repo/src/file.lua"
+        end,
+      },
+      fn = {
+        getcwd = function()
+          return "/parent"
+        end,
+        fnamemodify = function(path, modifier)
+          if modifier == ":h" then
+            local parent = path:match("^(.*)/[^/]+")
+            if not parent or parent == "" then
+              return "/"
+            end
+            return parent
+          end
+          return path
+        end,
+        resolve = function(path)
+          return path
+        end,
+        isdirectory = function(path)
+          return path ~= "/repo/src/file.lua" and 1 or 0
+        end,
+        filereadable = function(path)
+          return path == "/repo/src/file.lua" and 1 or 0
+        end,
+      },
+      v = {
+        shell_error = 0,
+      },
+    }
+
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.fn.systemlist = function(args)
+      if args[4] == "rev-parse" and args[5] == "--show-toplevel" then
+        return { "/repo" }
+      end
+      if args[5] == "rev-parse" and args[6] == "--abbrev-ref" then
+        return { "main" }
+      end
+      return {}
+    end
+  end)
+
+  after_each(function()
+    _G.vim = nil
+    package.loaded["local_review.infrastructure.context"] = nil
+  end)
+
+  it("prefers the current buffer's repo root over cwd", function()
+    local ctx = require("local_review.infrastructure.context")
+    assert.are.equal("/repo", ctx.default_export_root())
+  end)
+
+  it("falls back to cwd's repo root when buffer has no real file", function()
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.api.nvim_buf_get_name = function(_)
+      return ""
+    end
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.fn.systemlist = function(args)
+      if args[4] == "rev-parse" and args[5] == "--show-toplevel" then
+        return { "/parent/repo" }
+      end
+      if args[5] == "rev-parse" and args[6] == "--abbrev-ref" then
+        return { "main" }
+      end
+      return {}
+    end
+
+    local ctx = require("local_review.infrastructure.context")
+    assert.are.equal("/parent/repo", ctx.default_export_root())
+  end)
+
+  it("falls back to cwd when neither buffer nor cwd is in a repo", function()
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.api.nvim_buf_get_name = function(_)
+      return ""
+    end
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.fn.systemlist = function(_)
+      _G.vim.v.shell_error = 1
+      return {}
+    end
+
+    local ctx = require("local_review.infrastructure.context")
+    assert.are.equal("/parent", ctx.default_export_root())
+  end)
+end)
