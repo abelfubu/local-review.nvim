@@ -26,9 +26,17 @@ describe("storage", function()
     package.loaded["local_review.domain.comment_store"] = nil
 
     _G.vim = {
+      fs = {
+        normalize = function(path)
+          return path
+        end,
+      },
       fn = {
         sha256 = function(value)
           return "hash-" .. tostring(value)
+        end,
+        resolve = function(path)
+          return path
         end,
         filereadable = function(path)
           return readable_files[path] and 1 or 0
@@ -402,5 +410,25 @@ describe("storage", function()
     assert.is_true(ids["local-1"])
     assert.is_true(ids["local-2"])
     assert.is_true(ids["local-3"])
+  end)
+
+  it("resolves symlinks in persisted comment paths on load", function()
+    ---@diagnostic disable-next-line: duplicate-set-field
+    _G.vim.fn.resolve = function(path)
+      return path:gsub("^/var/", "/private/var/")
+    end
+
+    local path = module.scope_file("/private/var/repo")
+    file_contents[path] = require("dkjson").encode({
+      comments = {
+        { id = "local-1", origin = "local", absolute_path = "/var/repo/a.lua", anchor = { line_number = 1 } },
+      },
+    })
+    readable_files[path] = true
+    file_mtimes[path] = next_mtime
+    next_mtime = next_mtime + 1
+
+    local data = module.load_scope("/private/var/repo")
+    assert.are.equal("/private/var/repo/a.lua", data.comments[1].absolute_path)
   end)
 end)

@@ -4,7 +4,7 @@ local M = {}
 local branch_cache = {}
 
 local function normalize(path)
-  return vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
+  return vim.fn.resolve(vim.fs.normalize(vim.fn.fnamemodify(path, ":p")))
 end
 
 function M.normalize_path(path)

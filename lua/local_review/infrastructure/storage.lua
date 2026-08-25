@@ -1,4 +1,5 @@
 local comment_store = require("local_review.domain.comment_store")
+local context = require("local_review.infrastructure.context")
 
 local M = {}
 
@@ -186,6 +187,12 @@ function M.load_scope(scope_root)
   local comments = {}
   for _, comment in ipairs(data.comments or {}) do
     if comment.origin ~= "github" then
+      -- Legacy migration: old comments may store symlinked absolute paths
+      -- while scope_root / export paths are resolved to real paths. Resolve
+      -- on load so path matching stays consistent.
+      if type(comment.absolute_path) == "string" and comment.absolute_path ~= "" then
+        comment.absolute_path = context.normalize_path(comment.absolute_path) or comment.absolute_path
+      end
       table.insert(comments, comment)
     end
   end

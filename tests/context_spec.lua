@@ -7,6 +7,42 @@ package.path = table.concat({
   package.path,
 }, ";")
 
+describe("context.normalize_path", function()
+  before_each(function()
+    package.loaded["local_review.infrastructure.context"] = nil
+
+    _G.vim = {
+      fs = {
+        normalize = function(path)
+          return path
+        end,
+      },
+      fn = {
+        fnamemodify = function(path, modifier)
+          if modifier == ":p" then
+            return path
+          end
+          return path
+        end,
+        resolve = function(path)
+          -- Simulates /var -> /private/var symlink resolution on macOS.
+          return path:gsub("^/var/", "/private/var/")
+        end,
+      },
+    }
+  end)
+
+  after_each(function()
+    _G.vim = nil
+    package.loaded["local_review.infrastructure.context"] = nil
+  end)
+
+  it("resolves symlinks so git repo roots and file paths match", function()
+    local ctx = require("local_review.infrastructure.context")
+    assert.are.equal("/private/var/tmp/repo/example.lua", ctx.normalize_path("/var/tmp/repo/example.lua"))
+  end)
+end)
+
 describe("context.current_branch cache", function()
   local system_calls
   local branch_result
@@ -35,6 +71,9 @@ describe("context.current_branch cache", function()
           if modifier == ":h" then
             return path:match("^(.*)/[^/]+$") or path
           end
+          return path
+        end,
+        resolve = function(path)
           return path
         end,
         isdirectory = function()
